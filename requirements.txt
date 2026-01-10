@@ -1,0 +1,23 @@
+# Data handling
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Technical Analysis
+pandas-ta>=0.3.14b
+
+# API
+oandapyV20>=0.7.2
+
+# Database
+psycopg2-binary>=2.9.0
+SQLAlchemy>=2.0.0
+
+# Configuration
+python-dotenv>=1.0.0
+
+# AI Integration
+google-generativeai>=0.3.0
+
+# Visualization
+matplotlib>=3.7.0
+plotly>=5.14.0
