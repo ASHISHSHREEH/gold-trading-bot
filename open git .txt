@@ -1,9 +1,0 @@
-aashs@DESKTOP-7T6NB0G MINGW64 ~/OneDrive/デスクトップ
-$ cd /d/My\ projects/
-mkdir gold-trading-bot
-cd gold-trading-bot
-
-aashs@DESKTOP-7T6NB0G MINGW64 /d/My projects/gold-trading-bot
-$ git init
-Initialized empty Git repository in D:/My projects/gold-trading-bot/.git/
-
