@@ -1,29 +1,42 @@
-# Environment variables (secrets)
+# Environment variables (NEVER COMMIT!)
 .env
+.env.local
+.env.*.local
 
-# Python
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+data/trading.db
+data/*.db
+
+# Logs
+logs/
+*.log
+bot.log
+
+# Python cache
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
+*.so
 .Python
+
+# Virtual environments
 venv/
 env/
-*.egg-info/
+ENV/
 
-# Database
-*.db
-*.sqlite3
-
-# IDE
+# IDEs
 .vscode/
 .idea/
 *.swp
-
-# Logs
-*.log
+*.swo
 
 # OS
 .DS_Store
 Thumbs.db
-.env
+
+# Testing
+.pytest_cache/
+.coverage
