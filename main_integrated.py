@@ -37,8 +37,8 @@ ACCOUNT_SIZE = 1_000_000      # Starting balance (JPY)
 RISK_PER_TRADE = 0.02         # 2% risk per trade
 MAX_DAILY_LOSS = 0.05         # 5% max daily loss
 MAX_POSITIONS = 3             # Max concurrent positions
-SCAN_INTERVAL = 60            # Seconds between scans
-RUN_ONCE = True              # Set True for testing/debugging
+SCAN_INTERVAL = 300           # Seconds between scans
+RUN_ONCE = False              # Set True for testing/debugging
 
 TIMEFRAMES = {
     'trend': {
