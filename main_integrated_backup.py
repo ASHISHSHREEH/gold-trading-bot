@@ -2,7 +2,7 @@
 GOLD TRADING BOT - INTEGRATED SYSTEM (MAIN)
 ===========================================
 A fully automated paper trading system that combines:
-1. Multi-Timeframe Analysis (15m Trend + 1M Entry)
+1. Multi-Timeframe Analysis (1H Trend + 1M Entry)
 2. Robust Risk Management
 3. Real-time Position Monitoring (SL/TP)
 4. Database Persistence
@@ -37,22 +37,21 @@ ACCOUNT_SIZE = 1_000_000      # Starting balance (JPY)
 RISK_PER_TRADE = 0.02         # 2% risk per trade
 MAX_DAILY_LOSS = 0.05         # 5% max daily loss
 MAX_POSITIONS = 3             # Max concurrent positions
-SCAN_INTERVAL = 60            # Seconds between scans (1 minute)
+SCAN_INTERVAL = 300           # Seconds between scans
 RUN_ONCE = False              # Set True for testing/debugging
 
-# UPDATED TIMEFRAMES: Faster 15m trend for Intraday Trading
 TIMEFRAMES = {
     'trend': {
-        'name': '15-Minute Trend',  # Intraday Trend
-        'interval': '15m',          # 15m Candles
-        'period': '5d',             # 5 days history (Sufficient for MA50)
-        'ma_periods': [20, 50]      # 20 (Short-term) and 50 (Medium-term) MAs
+        'name': '1-Hour Trend',
+        'interval': '1h',
+        'period': '1mo',
+        'ma_periods': [50, 200]
     },
     'entry': {
-        'name': '1-Minute Entry',   # Tactical Entry
-        'interval': '1m',           # 1m Candles
-        'period': '5d',             
-        'ma_periods': [20, 50]      
+        'name': '1-Minute Entry',
+        'interval': '1m',
+        'period': '5d',
+        'ma_periods': [20, 50]
     }
 }
 
@@ -212,7 +211,7 @@ def analyze_timeframe(fetcher, tf_config: Dict, indicators: Dict, use_completed_
 def generate_signal(trend_result: Dict, entry_result: Dict) -> Dict[str, Any]:
     """
     Generate BUY/SELL/NEUTRAL signal based on Multi-Timeframe Confluence.
-    Rule: Trade in direction of 15m Trend ONLY if 1M Entry signals confirm.
+    Rule: Trade in direction of 1H Trend ONLY if 1M Entry signals confirm.
     """
     signal = "NEUTRAL"
     confidence = "LOW"
@@ -223,8 +222,7 @@ def generate_signal(trend_result: Dict, entry_result: Dict) -> Dict[str, Any]:
     is_bullish_trend = trend_dir in ['STRONG_BULL', 'BULL']
     is_bearish_trend = trend_dir in ['STRONG_BEAR', 'BEAR']
     
-    # UPDATED: Text reflects 15m timeframe
-    reasons.append(f"15m trend: {trend_dir}")
+    reasons.append(f"1h trend: {trend_dir}")
 
     # 2. Analyze Entry Signals
     rsi = entry_result['rsi_analysis']
@@ -356,16 +354,11 @@ def display_signal_analysis(signal_data, trend_res, entry_res):
     t_ana = trend_res['ma_analysis']
     e_ana = entry_res
     
-    # Helper to get periods for display
-    fast_p = TIMEFRAMES['trend']['ma_periods'][0]
-    slow_p = TIMEFRAMES['trend']['ma_periods'][1]
-
     print("──────────────────────────────────────────────────────────────────")
-    # UPDATED: Correct labels for 15-Min Trend
-    print(f"🕐 15-MIN TREND (CONFIRMED @ {trend_res['timestamp'].strftime('%H:%M')})")
+    print(f"🕐 1-HOUR TREND (CONFIRMED @ {trend_res['timestamp'].strftime('%H:%M')})")
     print(f"Direction: {t_ana['trend']}")
-    print(f"MA Fast ({fast_p}): ¥{t_ana['ma_fast']:,.2f}") 
-    print(f"MA Slow ({slow_p}): ¥{t_ana['ma_slow']:,.2f}") 
+    print(f"MA Fast:   ¥{t_ana['ma_fast']:,.2f}")
+    print(f"MA Slow:   ¥{t_ana['ma_slow']:,.2f}")
     
     print(f"⚡ 1-MINUTE ENTRY (LIVE @ {entry_res['timestamp'].strftime('%H:%M:%S')})")
     print(f"Price:  ¥{entry_res['price']:,.2f}")
@@ -385,9 +378,7 @@ def display_signal_analysis(signal_data, trend_res, entry_res):
     color = "🟢" if sig == 'BUY' else ("🔴" if sig == 'SELL' else "⚪")
     
     print(f"{color} FINAL SIGNAL: {sig} ({conf})")
-    # Updated reason text generation to reflect timeframe
-    reasons_str = '; '.join(signal_data['reasons']).replace('1h trend', '15m trend')
-    print(f"Reasons: {reasons_str}")
+    print(f"Reasons: {'; '.join(signal_data['reasons'])}")
 
 # --- MAIN SCAN LOGIC ---
 
@@ -408,8 +399,7 @@ def run_scan(components: Dict, scan_count: int):
         # Step 2: Fetch and Analyze
         print("📊 Fetching market data...")
         
-        # Trend (15m) - Use Completed Candle (Anti-Repainting)
-        # Note: 'use_completed_candle=True' will pick iloc[-2] from the 15m dataset
+        # Trend (1H) - Use Completed Candle (Anti-Repainting)
         trend_res = analyze_timeframe(fetcher, TIMEFRAMES['trend'], indicators, use_completed_candle=True)
         
         # Entry (1M) - Use Current Candle (Tactical)
@@ -484,8 +474,8 @@ def run_scan(components: Dict, scan_count: int):
 def main():
     print("\n" * 2)
     print("****************************************************************")
-    print("* GOLD TRADING BOT - INTEGRATED SYSTEM v1.1                    *")
-    print("* Multi-Timeframe (15m Trend) | Risk Managed | SQLite          *")
+    print("* GOLD TRADING BOT - INTEGRATED SYSTEM v1.0                    *")
+    print("* Multi-Timeframe | Risk Managed | SQLite                      *")
     print("****************************************************************")
     print("\n")
 
