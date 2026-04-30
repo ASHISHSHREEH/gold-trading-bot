@@ -65,24 +65,24 @@ class MT5DataFetcher:
             logger.critical("MetaTrader5 package not installed. Run: pip install MetaTrader5")
             return False
 
-        # When multiple MT5 terminals are installed, pass the explicit path
-        # so we connect to the right one (FxPro, not FBS etc.)
-        init_kwargs = {}
+        # Pass all credentials directly to initialize() so it can launch
+        # the terminal automatically and log in without manual intervention.
+        # This also ensures we connect to the correct terminal when multiple
+        # MT5 installs exist (FxPro vs FBS vs generic).
+        init_kwargs = dict(
+            login=config.MT5_LOGIN,
+            password=config.MT5_PASSWORD,
+            server=config.MT5_SERVER,
+        )
         if config.MT5_PATH:
             init_kwargs["path"] = config.MT5_PATH
 
         if not mt5.initialize(**init_kwargs):
             logger.critical(f"mt5.initialize() failed: {mt5.last_error()}")
-            return False
-
-        ok = mt5.login(
-            login=config.MT5_LOGIN,
-            password=config.MT5_PASSWORD,
-            server=config.MT5_SERVER,
-        )
-        if not ok:
-            logger.critical(f"mt5.login() failed: {mt5.last_error()}")
-            mt5.shutdown()
+            logger.critical(
+                "Make sure the FxPro MT5 terminal is installed and the path "
+                "in MT5_PATH is correct."
+            )
             return False
 
         info = mt5.account_info()
