@@ -1,12 +1,7 @@
 """
 MT5Executor — places live market orders through mt5.order_send().
-
-Design principles (learned from production FX desks):
-  • Never hardcode prices; always refresh tick before each attempt.
-  • Lot sizing derived from account risk, not arbitrary fixed size.
-  • Broker's minimum stop distance is enforced before every order.
-  • Requotes / price-off errors are retried with exponential back-off.
-  • R:R gate blocks any trade that doesn't meet MIN_RR_RATIO.
+Fully symbol-aware: every method takes an explicit symbol argument
+so the same executor handles GOLD, indices, and FX identically.
 """
 import logging
 import time
@@ -20,9 +15,6 @@ except ImportError:
 import config
 
 logger = logging.getLogger(__name__)
-
-# Retryable MT5 return codes (price moved; try again with fresh quote)
-_RETRYABLE = frozenset()  # populated at runtime once mt5 is confirmed available
 
 
 def _retryable_codes():
@@ -39,10 +31,6 @@ def _retryable_codes():
 
 
 class MT5Executor:
-    """
-    Stateless execution engine.  One instance lives for the whole session.
-    Requires a connected MT5DataFetcher passed at construction.
-    """
 
     def __init__(self, fetcher):
         self.fetcher = fetcher
@@ -53,27 +41,26 @@ class MT5Executor:
         self,
         signal: str,
         atr_value: float,
+        symbol: str,
     ) -> Optional[Dict[str, Any]]:
         """
-        Open a market order.
+        Open a market order for the given symbol.
 
         Args:
             signal:    'BUY' or 'SELL'
-            atr_value: current ATR in price units (from ATRCalculator.get_latest)
-
-        Returns:
-            Execution dict on success, None on any failure.
+            atr_value: current ATR in price units
+            symbol:    MT5 symbol name (e.g. 'GOLD', '#USSPX500')
         """
         if mt5 is None:
             logger.critical("MetaTrader5 not installed.")
             return None
 
-        tick     = self.fetcher.get_current_tick()
-        sym_info = self.fetcher.get_symbol_info()
+        tick     = self.fetcher.get_current_tick(symbol)
+        sym_info = self.fetcher.get_symbol_info(symbol)
         acct     = self.fetcher.get_account_info()
 
         if not tick or not sym_info or not acct:
-            logger.error("Cannot execute: missing tick / symbol / account data.")
+            logger.error(f"[{symbol}] Cannot execute: missing market data.")
             return None
 
         is_buy = signal.upper() == "BUY"
@@ -83,9 +70,9 @@ class MT5Executor:
         if sl is None:
             return None
 
-        rr = abs(tp - price) / abs(sl - price)
+        rr = abs(tp - price) / abs(sl - price) if abs(sl - price) > 0 else 0
         if rr < config.MIN_RR_RATIO:
-            logger.warning(f"R:R {rr:.2f} < MIN {config.MIN_RR_RATIO}. Order blocked.")
+            logger.warning(f"[{symbol}] R:R {rr:.2f} < MIN {config.MIN_RR_RATIO}. Blocked.")
             return None
 
         lots = self._calculate_lots(price, sl, acct["balance"], sym_info)
@@ -100,7 +87,7 @@ class MT5Executor:
 
         request = {
             "action":       mt5.TRADE_ACTION_DEAL,
-            "symbol":       config.SYMBOL,
+            "symbol":       symbol,
             "volume":       lots,
             "type":         order_type,
             "price":        price,
@@ -108,24 +95,24 @@ class MT5Executor:
             "tp":           tp,
             "deviation":    config.SLIPPAGE,
             "magic":        config.MAGIC,
-            "comment":      "GoldBot-ATR",
+            "comment":      f"GoldBot-{symbol[:6]}",
             "type_time":    mt5.ORDER_TIME_GTC,
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
-        result = self._send_with_retry(request)
+        result = self._send_with_retry(request, symbol)
         if result is None:
             return None
 
         risk_amount = acct["balance"] * config.RISK_PER_TRADE
         logger.info(
-            f"EXECUTED {signal} | ticket={result.order} "
+            f"[{symbol}] EXECUTED {signal} | ticket={result.order} "
             f"@ {result.price} | vol={result.volume} lots | "
-            f"SL={sl} TP={tp} | ATR={atr_value:.2f} R:R={rr:.2f}"
+            f"SL={sl} TP={tp} | ATR={atr_value:.4f} R:R={rr:.2f}"
         )
         return {
             "ticket":      result.order,
-            "symbol":      config.SYMBOL,
+            "symbol":      symbol,
             "direction":   signal.upper(),
             "entry_price": result.price,
             "volume":      result.volume,
@@ -136,30 +123,28 @@ class MT5Executor:
             "rr_ratio":    round(rr, 2),
         }
 
-    def close_position(self, ticket: int) -> bool:
-        """Close a specific position by ticket number."""
+    def close_position(self, ticket: int, symbol: str) -> bool:
         if mt5 is None:
             return False
 
         positions = mt5.positions_get(ticket=ticket)
         if not positions:
-            logger.warning(f"Position {ticket} not found for close.")
+            logger.warning(f"Position {ticket} not found.")
             return False
 
         pos        = positions[0]
         is_buy_pos = pos.type == mt5.POSITION_TYPE_BUY
         close_type = mt5.ORDER_TYPE_SELL if is_buy_pos else mt5.ORDER_TYPE_BUY
 
-        tick = self.fetcher.get_current_tick()
+        tick = self.fetcher.get_current_tick(symbol)
         if not tick:
-            logger.error("Cannot close: no tick data.")
             return False
 
         close_price = tick["bid"] if is_buy_pos else tick["ask"]
 
         request = {
             "action":       mt5.TRADE_ACTION_DEAL,
-            "symbol":       config.SYMBOL,
+            "symbol":       symbol,
             "volume":       pos.volume,
             "type":         close_type,
             "position":     ticket,
@@ -171,47 +156,35 @@ class MT5Executor:
             "type_filling": mt5.ORDER_FILLING_IOC,
         }
 
-        result = self._send_with_retry(request)
+        result = self._send_with_retry(request, symbol)
         if result:
-            logger.info(f"Closed ticket={ticket} @ {close_price}")
+            logger.info(f"[{symbol}] Closed ticket={ticket} @ {close_price}")
         return result is not None
 
     # ── Internal Helpers ───────────────────────────────────────────────────────
 
     def _calculate_sl_tp(self, price, atr, is_buy, sym_info):
-        """Compute SL/TP and enforce broker minimum stop distance."""
-        if is_buy:
-            sl = price - atr * config.ATR_SL_MULT
-            tp = price + atr * config.ATR_TP_MULT
-        else:
-            sl = price + atr * config.ATR_SL_MULT
-            tp = price - atr * config.ATR_TP_MULT
+        sl = price - atr * config.ATR_SL_MULT if is_buy else price + atr * config.ATR_SL_MULT
+        tp = price + atr * config.ATR_TP_MULT if is_buy else price - atr * config.ATR_TP_MULT
 
-        # Broker minimum stop distance in price units
         min_dist = sym_info["stops_level"] * sym_info["point"]
         if min_dist > 0 and abs(price - sl) < min_dist:
             sl = price - min_dist if is_buy else price + min_dist
             tp_mult = config.ATR_TP_MULT / config.ATR_SL_MULT
             tp = price + min_dist * tp_mult if is_buy else price - min_dist * tp_mult
-            logger.debug(f"SL adjusted to broker minimum: min_dist={min_dist}")
 
         return sl, tp
 
     def _calculate_lots(self, price, sl, balance, sym_info) -> float:
-        """
-        Lot sizing formula (institutional standard):
-            lots = (balance × risk_pct) / (sl_distance × contract_size)
-        """
         sl_distance   = abs(price - sl)
         contract_size = sym_info["contract_size"]
 
         if sl_distance == 0 or contract_size == 0:
-            logger.error("Cannot size position: zero SL distance or contract size.")
+            logger.error("Cannot size: zero SL distance or contract size.")
             return 0.0
 
         risk_amount = balance * config.RISK_PER_TRADE
         raw_lots    = risk_amount / (sl_distance * contract_size)
-
         return self._round_lots(raw_lots, sym_info)
 
     def _round_lots(self, raw: float, sym_info: dict) -> float:
@@ -219,25 +192,22 @@ class MT5Executor:
         max_lot  = sym_info["max_lot"]
         lot_step = sym_info["lot_step"]
 
-        # Snap to nearest lot_step (always round down to avoid over-risking)
         lots = (raw // lot_step) * lot_step
-        lots = round(lots, 8)   # floating-point cleanup
+        lots = round(lots, 8)
 
         if lots < min_lot:
-            logger.warning(
-                f"Calculated {raw:.5f} lots < min {min_lot}. Position skipped."
-            )
+            logger.warning(f"Lot size {raw:.5f} < min {min_lot}. Skipping.")
             return 0.0
         return min(lots, max_lot)
 
-    def _send_with_retry(self, request: dict, max_retries: int = 3):
+    def _send_with_retry(self, request: dict, symbol: str, max_retries: int = 3):
         retryable = _retryable_codes()
         delay     = 1.0
 
         for attempt in range(1, max_retries + 1):
             result = mt5.order_send(request)
             if result is None:
-                logger.error(f"order_send returned None: {mt5.last_error()}")
+                logger.error(f"[{symbol}] order_send None: {mt5.last_error()}")
                 return None
 
             if result.retcode == mt5.TRADE_RETCODE_DONE:
@@ -245,27 +215,23 @@ class MT5Executor:
 
             if result.retcode in retryable:
                 logger.warning(
-                    f"Retryable code {result.retcode} (attempt {attempt}/{max_retries}). "
-                    f"Refreshing price, retrying in {delay:.0f}s..."
+                    f"[{symbol}] Retryable {result.retcode} "
+                    f"(attempt {attempt}/{max_retries}). Retry in {delay:.0f}s..."
                 )
-                # Refresh price so the next attempt uses current market
-                tick = self.fetcher.get_current_tick()
+                tick = self.fetcher.get_current_tick(symbol)
                 if tick and "price" in request:
-                    sym_info = self.fetcher.get_symbol_info()
+                    sym_info = self.fetcher.get_symbol_info(symbol)
                     digits   = sym_info.get("digits", 5)
-                    if request["type"] == mt5.ORDER_TYPE_BUY:
-                        request["price"] = round(tick["ask"], digits)
-                    else:
-                        request["price"] = round(tick["bid"], digits)
-
+                    request["price"] = round(
+                        tick["ask"] if request["type"] == mt5.ORDER_TYPE_BUY else tick["bid"],
+                        digits
+                    )
                 time.sleep(delay)
                 delay *= 2
                 continue
 
-            logger.error(
-                f"Order rejected | retcode={result.retcode} | {result.comment}"
-            )
+            logger.error(f"[{symbol}] Order rejected {result.retcode}: {result.comment}")
             return None
 
-        logger.error("Max retries exhausted. Order abandoned.")
+        logger.error(f"[{symbol}] Max retries exhausted.")
         return None
