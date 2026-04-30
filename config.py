@@ -1,16 +1,13 @@
 """
 Central configuration — all tunables live here, secrets in .env
 
-DATA_COLLECTION_MODE=true  →  relaxed filters for demo data gathering
-DATA_COLLECTION_MODE=false →  strict real-money filters (default)
+Current mode: DATA COLLECTION — relaxed filters for demo data gathering.
+When switching to real money, restore the values marked # REAL MONEY below.
 """
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# ── Mode switch ────────────────────────────────────────────────────────────────
-DATA_COLLECTION_MODE = os.getenv("DATA_COLLECTION_MODE", "false").lower() == "true"
 
 # ── MT5 Connection ─────────────────────────────────────────────────────────────
 MT5_LOGIN    = int(os.getenv("MT5_LOGIN",    "0"))
@@ -27,31 +24,30 @@ SYMBOLS      = [s.strip() for s in _symbols_raw.split(",") if s.strip()]
 SYMBOL       = SYMBOLS[0]
 
 # ── Three-Timeframe System ─────────────────────────────────────────────────────
-# Upgrade 1: H1 major trend → M15 confirmation → M5 entry (replaced M1)
 TREND_TIMEFRAME   = "H1"    # major trend direction
 CONFIRM_TIMEFRAME = "M15"   # trend confirmation
-ENTRY_TIMEFRAME   = "M5"    # entry signals (clean, not noisy M1)
+ENTRY_TIMEFRAME   = "M5"    # entry signals
 
-TREND_CANDLES   = 100       # H1 candles
-CONFIRM_CANDLES = 100       # M15 candles
-ENTRY_CANDLES   = 100       # M5 candles
+TREND_CANDLES   = 100
+CONFIRM_CANDLES = 100
+ENTRY_CANDLES   = 100
 
-# ── RSI Pullback Zones (Upgrade 2) ─────────────────────────────────────────────
-# REAL: tight pullback zones — RSI must be mid-trend, not at extremes
-# DATA: wider zones so more candles qualify
-RSI_BULL_MIN = 35 if DATA_COLLECTION_MODE else 40
-RSI_BULL_MAX = 60 if DATA_COLLECTION_MODE else 55
-RSI_BEAR_MIN = 40 if DATA_COLLECTION_MODE else 45
-RSI_BEAR_MAX = 65 if DATA_COLLECTION_MODE else 60
+# ── RSI Pullback Zones ─────────────────────────────────────────────────────────
+# DATA COLLECTION — wider zones, more candles qualify
+RSI_BULL_MIN = 35   # REAL MONEY: 40
+RSI_BULL_MAX = 60   # REAL MONEY: 55
+RSI_BEAR_MIN = 40   # REAL MONEY: 45
+RSI_BEAR_MAX = 65   # REAL MONEY: 60
 
-# ── Session Filter (Upgrade 3) — all times UTC ────────────────────────────────
-# REAL: Tokyo open + London + New York only
-# DATA: empty dict = trade 24/5, no dead zones
-SESSIONS = {} if DATA_COLLECTION_MODE else {
-    "Tokyo":   (0,  2),    # 00:00–02:00 UTC  (09:00–11:00 JST)
-    "London":  (7,  16),   # 07:00–16:00 UTC  (08:00–17:00 BST)
-    "NewYork": (13, 21),   # 13:00–21:00 UTC  (09:00–17:00 EDT)
-}
+# ── Session Filter — all times UTC ────────────────────────────────────────────
+# DATA COLLECTION — empty = trade 24/5, no dead zones
+# REAL MONEY: restore the dict below
+#   SESSIONS = {
+#       "Tokyo":   (0,  2),
+#       "London":  (7,  16),
+#       "NewYork": (13, 21),
+#   }
+SESSIONS = {}
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
@@ -59,22 +55,21 @@ MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MIN_RR_RATIO   = 2.0
 
-# ── Volume Filter (Upgrade 5) ──────────────────────────────────────────────────
-# REAL: 80 % of avg — guards against fake moves in thin markets
-# DATA: 50 % — still blocks near-zero volume bars, but passes most candles
+# ── Volume Filter ──────────────────────────────────────────────────────────────
+# DATA COLLECTION — 50% still blocks dead bars, but passes most candles
 VOLUME_LOOKBACK  = 20
-VOLUME_MIN_RATIO = 0.5 if DATA_COLLECTION_MODE else 0.8
+VOLUME_MIN_RATIO = 0.5   # REAL MONEY: 0.8
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
 ATR_SL_MULT = 1.5
 ATR_TP_MULT = 3.0
 
-# ── Position Management — Trailing Stop + Partial TP (Upgrade 4) ──────────────
-BREAKEVEN_AT_R   = 1.0   # move SL to breakeven when unrealised = 1R
-TRAIL_START_AT_R = 1.5   # start trailing when unrealised = 1.5R
-TRAIL_ATR_MULT   = 0.5   # trail distance = 0.5 × ATR
-PARTIAL_TP_RATIO = 0.5   # close this fraction of position at 1R
+# ── Position Management — Trailing Stop + Partial TP ──────────────────────────
+BREAKEVEN_AT_R   = 1.0
+TRAIL_START_AT_R = 1.5
+TRAIL_ATR_MULT   = 0.5
+PARTIAL_TP_RATIO = 0.5
 
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60
