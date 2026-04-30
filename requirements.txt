@@ -1,24 +1,18 @@
-# Data handling
+# ── Core ────────────────────────────────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.24.0
 
-# Data sources
-yfinance>=0.2.0
-requests>=2.28.0
+# ── MetaTrader 5 (Windows only) ──────────────────────────────────────────────
+# Install MT5 terminal first: https://www.metatrader5.com/en/download
+MetaTrader5>=5.0.45
 
-# Technical Analysis (REMOVED pandas-ta - we'll use manual calculations)
-# pandas-ta>=0.3.14b  
-
-# Configuration
+# ── Configuration ────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
 
-# Database (for future use)
-psycopg2-binary>=2.9.0
-SQLAlchemy>=2.0.0
-
-# AI Integration (for future use)
-google-generativeai>=0.3.0
-
-# Visualization
+# ── Visualization / Reporting ────────────────────────────────────────────────
 matplotlib>=3.7.0
 plotly>=5.14.0
+
+# ── Removed: yfinance, requests, psycopg2, SQLAlchemy, google-generativeai ──
+# All data now comes directly from MT5 terminal.
+# SQLite (built-in) is used for analytics — no external DB needed.
