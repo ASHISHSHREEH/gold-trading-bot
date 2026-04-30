@@ -65,7 +65,13 @@ class MT5DataFetcher:
             logger.critical("MetaTrader5 package not installed. Run: pip install MetaTrader5")
             return False
 
-        if not mt5.initialize():
+        # When multiple MT5 terminals are installed, pass the explicit path
+        # so we connect to the right one (FxPro, not FBS etc.)
+        init_kwargs = {}
+        if config.MT5_PATH:
+            init_kwargs["path"] = config.MT5_PATH
+
+        if not mt5.initialize(**init_kwargs):
             logger.critical(f"mt5.initialize() failed: {mt5.last_error()}")
             return False
 
