@@ -58,7 +58,7 @@ MIN_RR_RATIO   = 2.0
 # ── Volume Filter ──────────────────────────────────────────────────────────────
 # DATA COLLECTION — 50% still blocks dead bars, but passes most candles
 VOLUME_LOOKBACK  = 20
-VOLUME_MIN_RATIO = 0.3   # REAL MONEY: 0.8  (0.3 for data collection — passes all but dead bars)
+VOLUME_MIN_RATIO = 0.0   # REAL MONEY: 0.8  (0.0 = disabled for data collection)
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14

@@ -80,6 +80,7 @@ class MT5Executor:
             return None
 
         digits = sym_info["digits"]
+        filling = self._filling_mode(symbol)
         request = {
             "action":       mt5.TRADE_ACTION_DEAL,
             "symbol":       symbol,
@@ -92,7 +93,7 @@ class MT5Executor:
             "magic":        config.MAGIC,
             "comment":      f"GoldBot-{symbol[:6]}",
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": filling,
         }
 
         result = self._send_with_retry(request, symbol)
@@ -204,7 +205,7 @@ class MT5Executor:
             "magic":        config.MAGIC,
             "comment":      "GoldBot-PartialTP",
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_mode(symbol),
         }
 
         result = self._send_with_retry(request, symbol)
@@ -240,7 +241,7 @@ class MT5Executor:
             "magic":        config.MAGIC,
             "comment":      "GoldBot-Close",
             "type_time":    mt5.ORDER_TIME_GTC,
-            "type_filling": mt5.ORDER_FILLING_IOC,
+            "type_filling": self._filling_mode(symbol),
         }
 
         result = self._send_with_retry(request, symbol)
@@ -262,6 +263,21 @@ class MT5Executor:
                   price - min_dist * (config.ATR_TP_MULT / config.ATR_SL_MULT))
 
         return sl, tp
+
+    def _filling_mode(self, symbol: str) -> int:
+        """Return the filling mode supported by this symbol/broker.
+        Checks the symbol's filling_mode bitmask: bit0=FOK, bit1=IOC, else RETURN."""
+        if mt5 is None:
+            return 2  # IOC fallback
+        info = mt5.symbol_info(symbol)
+        if info is None:
+            return mt5.ORDER_FILLING_RETURN
+        fm = info.filling_mode
+        if fm & 1:   # FOK supported
+            return mt5.ORDER_FILLING_FOK
+        if fm & 2:   # IOC supported
+            return mt5.ORDER_FILLING_IOC
+        return mt5.ORDER_FILLING_RETURN  # default — most brokers accept this
 
     def _calculate_lots(self, price, sl, balance, sym_info) -> float:
         sl_distance   = abs(price - sl)
@@ -308,7 +324,12 @@ class MT5Executor:
                 time.sleep(delay)
                 delay *= 2
                 continue
-            logger.error(f"[{symbol}] Rejected {result.retcode}: {result.comment}")
+            logger.error(
+                f"[{symbol}] Rejected retcode={result.retcode} "
+                f"comment='{result.comment}' "
+                f"filling={request.get('type_filling')} "
+                f"last_error={mt5.last_error()}"
+            )
             return None
 
         logger.error(f"[{symbol}] Max retries exhausted.")
