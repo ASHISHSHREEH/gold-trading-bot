@@ -24,14 +24,18 @@ logger = logging.getLogger(__name__)
 def _retryable_codes():
     if mt5 is None:
         return frozenset()
-    return frozenset({
-        mt5.TRADE_RETCODE_REQUOTE,
-        mt5.TRADE_RETCODE_PRICE_CHANGED,
-        mt5.TRADE_RETCODE_PRICE_OFF,
-        mt5.TRADE_RETCODE_OFF_QUOTES,
-        mt5.TRADE_RETCODE_CONNECTION,
-        mt5.TRADE_RETCODE_TIMEOUT,
-    })
+    # Use getattr so missing constants on older MT5 builds don't crash at import
+    names = (
+        "TRADE_RETCODE_REQUOTE",
+        "TRADE_RETCODE_PRICE_CHANGED",
+        "TRADE_RETCODE_PRICE_OFF",
+        "TRADE_RETCODE_OFF_QUOTES",
+        "TRADE_RETCODE_CONNECTION",
+        "TRADE_RETCODE_TIMEOUT",
+    )
+    return frozenset(
+        getattr(mt5, name) for name in names if hasattr(mt5, name)
+    )
 
 
 class MT5Executor:
@@ -66,7 +70,8 @@ class MT5Executor:
             return None
 
         rr = abs(tp - price) / abs(sl - price) if abs(sl - price) > 0 else 0
-        if rr < config.MIN_RR_RATIO:
+        # Use a tiny epsilon to avoid floating-point false failures (e.g. 1.9999 < 2.0)
+        if rr < config.MIN_RR_RATIO - 0.001:
             logger.warning(f"[{symbol}] R:R {rr:.2f} < {config.MIN_RR_RATIO}. Blocked.")
             return None
 
