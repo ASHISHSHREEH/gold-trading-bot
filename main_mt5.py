@@ -219,7 +219,7 @@ def generate_signal(
 
     # Volume is a hard gate (Upgrade 5) — fail immediately if below threshold
     if not entry["volume_ok"]:
-        reasons.append("BLOCKED: M5 volume below 80% of 20-bar avg")
+        reasons.append(f"BLOCKED: M5 volume below {config.VOLUME_MIN_RATIO*100:.0f}% of {config.VOLUME_LOOKBACK}-bar avg")
         return {
             "signal":     "NEUTRAL",
             "confidence": "LOW",
