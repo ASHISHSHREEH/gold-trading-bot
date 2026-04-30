@@ -1,10 +1,16 @@
 """
 Central configuration — all tunables live here, secrets in .env
+
+DATA_COLLECTION_MODE=true  →  relaxed filters for demo data gathering
+DATA_COLLECTION_MODE=false →  strict real-money filters (default)
 """
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Mode switch ────────────────────────────────────────────────────────────────
+DATA_COLLECTION_MODE = os.getenv("DATA_COLLECTION_MODE", "false").lower() == "true"
 
 # ── MT5 Connection ─────────────────────────────────────────────────────────────
 MT5_LOGIN    = int(os.getenv("MT5_LOGIN",    "0"))
@@ -31,21 +37,21 @@ CONFIRM_CANDLES = 100       # M15 candles
 ENTRY_CANDLES   = 100       # M5 candles
 
 # ── RSI Pullback Zones (Upgrade 2) ─────────────────────────────────────────────
-# In a real trend RSI rarely hits 30/70 — use the pullback zone instead
-RSI_BULL_MIN = 40   # bull pullback: RSI dipped into 40-55 range
-RSI_BULL_MAX = 55
-RSI_BEAR_MIN = 45   # bear rally:   RSI bounced into 45-60 range
-RSI_BEAR_MAX = 60
+# REAL: tight pullback zones — RSI must be mid-trend, not at extremes
+# DATA: wider zones so more candles qualify
+RSI_BULL_MIN = 35 if DATA_COLLECTION_MODE else 40
+RSI_BULL_MAX = 60 if DATA_COLLECTION_MODE else 55
+RSI_BEAR_MIN = 40 if DATA_COLLECTION_MODE else 45
+RSI_BEAR_MAX = 65 if DATA_COLLECTION_MODE else 60
 
 # ── Session Filter (Upgrade 3) — all times UTC ────────────────────────────────
-# Tokyo open has real volume at the start — user wants to trade it
-# London and New York are the institutional sessions for all symbols
-SESSIONS = {
+# REAL: Tokyo open + London + New York only
+# DATA: empty dict = trade 24/5, no dead zones
+SESSIONS = {} if DATA_COLLECTION_MODE else {
     "Tokyo":   (0,  2),    # 00:00–02:00 UTC  (09:00–11:00 JST)
     "London":  (7,  16),   # 07:00–16:00 UTC  (08:00–17:00 BST)
     "NewYork": (13, 21),   # 13:00–21:00 UTC  (09:00–17:00 EDT)
 }
-# Dead zones where bot sleeps: 02:00–07:00 UTC and 21:00–00:00 UTC
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
@@ -54,10 +60,10 @@ MAX_POSITIONS  = 4
 MIN_RR_RATIO   = 2.0
 
 # ── Volume Filter (Upgrade 5) ──────────────────────────────────────────────────
-# Current bar volume must be >= this ratio of the 20-bar average
-# Guards against fake moves in low-liquidity periods
+# REAL: 80 % of avg — guards against fake moves in thin markets
+# DATA: 50 % — still blocks near-zero volume bars, but passes most candles
 VOLUME_LOOKBACK  = 20
-VOLUME_MIN_RATIO = 0.8   # 80 % of average = minimum acceptable activity
+VOLUME_MIN_RATIO = 0.5 if DATA_COLLECTION_MODE else 0.8
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14

@@ -78,7 +78,10 @@ _pos_state: Dict[int, Dict[str, Any]] = {}
 # ── Session filter (Upgrade 3) ─────────────────────────────────────────────────
 
 def current_session() -> Optional[str]:
-    """Return the active session name, or None if we're in a dead zone."""
+    """Return the active session name, or None if we're in a dead zone.
+    In DATA_COLLECTION_MODE SESSIONS is empty, so always returns 'Always'."""
+    if not config.SESSIONS:
+        return "Always"
     utc_hour = datetime.now(timezone.utc).hour
     for name, (start, end) in config.SESSIONS.items():
         if start <= utc_hour < end:
@@ -630,7 +633,8 @@ def main():
     )
     print(f"  Sessions   : {sess_str}")
     print(f"  Account    : {config.MT5_LOGIN}  |  {config.MT5_SERVER}")
-    print(f"  Mode       : {config.ACCOUNT_TYPE}")
+    mode_label = "DATA COLLECTION (relaxed filters)" if config.DATA_COLLECTION_MODE else "REAL TRADING (strict filters)"
+    print(f"  Mode       : {config.ACCOUNT_TYPE}  |  {mode_label}")
     print(
         f"  Risk       : {config.RISK_PER_TRADE:.1%}/trade  |  "
         f"Max DD: {config.MAX_DAILY_LOSS:.1%}  |  "
