@@ -95,7 +95,18 @@ class MT5DataFetcher:
 
         # Ensure symbol is visible in MarketWatch
         if not mt5.symbol_select(config.SYMBOL, True):
-            logger.error(f"Symbol {config.SYMBOL} not available on this account.")
+            # Symbol not found — search for gold alternatives and guide the user
+            all_symbols = mt5.symbols_get()
+            gold_symbols = [
+                s.name for s in all_symbols
+                if "XAU" in s.name.upper() or "GOLD" in s.name.upper()
+            ] if all_symbols else []
+
+            logger.error(
+                f"Symbol '{config.SYMBOL}' not available on this account.\n"
+                f"  Available gold symbols on FxPro: {gold_symbols}\n"
+                f"  Update MT5_SYMBOL in your .env to one of the above."
+            )
             mt5.shutdown()
             return False
 
