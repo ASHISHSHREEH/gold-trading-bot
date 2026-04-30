@@ -1,0 +1,141 @@
+"""
+MT5PositionManager — reads live positions from the MT5 terminal.
+Tracks positions across ALL configured symbols combined.
+Risk gates are account-wide, not per-symbol.
+"""
+import logging
+from datetime import datetime
+from typing import Dict, List, Any
+
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None
+
+import config
+
+logger = logging.getLogger(__name__)
+
+
+class MT5PositionManager:
+
+    def __init__(self, fetcher):
+        self.fetcher = fetcher
+        self._session_start_balance: float = 0.0
+
+    def set_session_start_balance(self, balance: float):
+        self._session_start_balance = balance
+        logger.info(f"Session start balance locked at {balance:.2f}")
+
+    # ── Position Queries ───────────────────────────────────────────────────────
+
+    def get_open_positions(self, symbol: str = None) -> List[Dict[str, Any]]:
+        """
+        Return open positions opened by this bot (magic number filter).
+        If symbol is given, filter to that symbol only.
+        If symbol is None, return positions across ALL configured symbols.
+        """
+        if mt5 is None:
+            return []
+
+        result = []
+        symbols_to_check = [symbol] if symbol else config.SYMBOLS
+
+        for sym in symbols_to_check:
+            raw = mt5.positions_get(symbol=sym)
+            if raw is None:
+                continue
+            for p in raw:
+                if p.magic != config.MAGIC:
+                    continue
+                result.append({
+                    "ticket":        p.ticket,
+                    "symbol":        p.symbol,
+                    "direction":     "BUY" if p.type == mt5.POSITION_TYPE_BUY else "SELL",
+                    "entry_price":   p.price_open,
+                    "current_price": p.price_current,
+                    "sl":            p.sl,
+                    "tp":            p.tp,
+                    "volume":        p.volume,
+                    "profit":        p.profit,
+                    "swap":          p.swap,
+                    "open_time":     datetime.fromtimestamp(p.time),
+                })
+        return result
+
+    def get_position_count(self, symbol: str = None) -> int:
+        return len(self.get_open_positions(symbol))
+
+    def has_position_for(self, symbol: str) -> bool:
+        """True if there is already an open position for this symbol."""
+        return self.get_position_count(symbol) > 0
+
+    # ── Risk Gates ─────────────────────────────────────────────────────────────
+
+    def check_risk_limits(self, symbol: str = None) -> Dict[str, Any]:
+        """
+        Account-wide three-layer risk gate.
+        Also checks symbol-level: won't open a second position in the same symbol.
+
+        Returns:
+            { 'can_open_new': bool, 'reasons': list, 'position_count': int, 'account': dict }
+        """
+        all_positions = self.get_open_positions()
+        acct          = self.fetcher.get_account_info()
+        reasons       = []
+        can_trade     = True
+
+        # Gate 1 — max total positions across all symbols
+        if len(all_positions) >= config.MAX_POSITIONS:
+            reasons.append(
+                f"Max positions reached ({len(all_positions)}/{config.MAX_POSITIONS})"
+            )
+            can_trade = False
+
+        # Gate 2 — no duplicate position in the same symbol
+        if symbol and self.has_position_for(symbol):
+            reasons.append(f"Already have an open position in {symbol}")
+            can_trade = False
+
+        if acct:
+            # Gate 3 — daily drawdown circuit-breaker
+            if self._session_start_balance > 0:
+                drawdown = (
+                    self._session_start_balance - acct["equity"]
+                ) / self._session_start_balance
+
+                if drawdown >= config.MAX_DAILY_LOSS:
+                    reasons.append(
+                        f"Daily drawdown {drawdown:.1%} >= "
+                        f"{config.MAX_DAILY_LOSS:.1%} circuit-breaker"
+                    )
+                    can_trade = False
+
+            # Gate 4 — margin safety
+            ml = acct["margin_level"]
+            if ml > 0 and ml < 200:
+                reasons.append(f"Margin level critical: {ml:.0f}% (need > 200%)")
+                can_trade = False
+
+        return {
+            "can_open_new":   can_trade,
+            "reasons":        reasons,
+            "position_count": len(all_positions),
+            "account":        acct,
+        }
+
+    # ── Emergency Flatten ──────────────────────────────────────────────────────
+
+    def close_all_positions(self, executor) -> int:
+        """Close every position across all symbols opened by this bot."""
+        positions = self.get_open_positions()
+        closed    = 0
+        for pos in positions:
+            logger.warning(
+                f"EMERGENCY CLOSE: {pos['symbol']} ticket={pos['ticket']} "
+                f"{pos['direction']} profit={pos['profit']:.2f}"
+            )
+            if executor.close_position(pos["ticket"], pos["symbol"]):
+                closed += 1
+        logger.warning(f"Emergency flatten: {closed}/{len(positions)} closed.")
+        return closed
