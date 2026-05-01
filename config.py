@@ -18,6 +18,12 @@ MAGIC        = int(os.getenv("MT5_MAGIC",    "20240101"))
 SLIPPAGE     = int(os.getenv("MT5_SLIPPAGE", "20"))
 ACCOUNT_TYPE = os.getenv("ACCOUNT_TYPE",     "DEMO")
 
+# ── Account Currency FX Rate ───────────────────────────────────────────────────
+# Units of account currency per 1 USD.  e.g. 150.0 for JPY, 1.0 for USD.
+# Used to convert balance → USD for lot-size calculations.
+# Set ACCOUNT_FX_RATE in .env for your broker (check broker's USDJPY rate).
+ACCOUNT_FX_RATE = float(os.getenv("ACCOUNT_FX_RATE", "1.0"))
+
 # ── Multi-Symbol Trading ───────────────────────────────────────────────────────
 _symbols_raw = os.getenv("MT5_SYMBOLS", os.getenv("MT5_SYMBOL", "GOLD"))
 SYMBOLS      = [s.strip() for s in _symbols_raw.split(",") if s.strip()]

@@ -96,6 +96,22 @@ class MT5Executor:
             "type_filling": filling,
         }
 
+        # Pre-flight margin check — catches "No money" and "Invalid stops" cheaply
+        check = mt5.order_check(request)
+        if check is None:
+            logger.error(f"[{symbol}] order_check returned None: {mt5.last_error()}")
+            return None
+        if check.retcode not in (mt5.TRADE_RETCODE_DONE, 0):
+            code_name = {
+                10019: "No money (insufficient margin)",
+                10016: "Invalid stops (broker min-distance rejected)",
+            }.get(check.retcode, f"retcode={check.retcode}")
+            logger.warning(
+                f"[{symbol}] Pre-flight check FAILED — {code_name} "
+                f"comment='{check.comment}' — skipping order."
+            )
+            return None
+
         result = self._send_with_retry(request, symbol)
         if result is None:
             return None
@@ -255,12 +271,18 @@ class MT5Executor:
         sl = price - atr * config.ATR_SL_MULT if is_buy else price + atr * config.ATR_SL_MULT
         tp = price + atr * config.ATR_TP_MULT if is_buy else price - atr * config.ATR_TP_MULT
 
-        min_dist = sym_info["stops_level"] * sym_info["point"]
+        stops_level = sym_info.get("stops_level", 0)
+        point       = sym_info.get("point", 0.00001)
+        min_dist    = stops_level * point
+
         if min_dist > 0 and abs(price - sl) < min_dist:
+            logger.debug(
+                f"SL distance {abs(price-sl):.5f} < broker min {min_dist:.5f} "
+                f"(stops_level={stops_level}, point={point}) — widening."
+            )
+            rr_mult = config.ATR_TP_MULT / config.ATR_SL_MULT
             sl = price - min_dist if is_buy else price + min_dist
-            tp = (price + min_dist * (config.ATR_TP_MULT / config.ATR_SL_MULT)
-                  if is_buy else
-                  price - min_dist * (config.ATR_TP_MULT / config.ATR_SL_MULT))
+            tp = price + min_dist * rr_mult if is_buy else price - min_dist * rr_mult
 
         return sl, tp
 
@@ -285,7 +307,10 @@ class MT5Executor:
         if sl_distance == 0 or contract_size == 0:
             return 0.0
 
-        raw_lots = (balance * config.RISK_PER_TRADE) / (sl_distance * contract_size)
+        # Convert account balance to USD before calculating risk.
+        # ACCOUNT_FX_RATE is units of account currency per 1 USD (e.g. 150 for JPY).
+        balance_usd = balance / config.ACCOUNT_FX_RATE
+        raw_lots    = (balance_usd * config.RISK_PER_TRADE) / (sl_distance * contract_size)
         return self._round_lots(raw_lots, sym_info)
 
     def _round_lots(self, raw: float, sym_info: dict) -> float:
