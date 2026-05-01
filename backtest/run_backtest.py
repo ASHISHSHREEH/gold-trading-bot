@@ -39,6 +39,7 @@ def parse_args():
                    help="Bars to load per timeframe (default: 50000)")
     p.add_argument("--csv",  action="store_true", help="Load from saved CSV files")
     p.add_argument("--save", action="store_true", help="Save MT5 data to CSV then run")
+    p.add_argument("--h4",  default="backtest_H4.csv",  help="H4 CSV path")
     p.add_argument("--h1",  default="backtest_H1.csv",  help="H1 CSV path")
     p.add_argument("--m15", default="backtest_M15.csv", help="M15 CSV path")
     p.add_argument("--m5",  default="backtest_M5.csv",  help="M5 CSV path")
@@ -62,6 +63,7 @@ def main():
     if args.csv:
         print("\n[*] Loading from CSV files...")
         data = loader.load_from_csv(
+            h4_path  = args.h4,
             h1_path  = args.h1,
             m15_path = args.m15,
             m5_path  = args.m5,

@@ -22,6 +22,7 @@ class DataLoader:
             raise RuntimeError("MetaTrader5 package not installed.")
 
         tf_map = {
+            "H4":  mt5.TIMEFRAME_H4,
             "H1":  mt5.TIMEFRAME_H1,
             "M15": mt5.TIMEFRAME_M15,
             "M5":  mt5.TIMEFRAME_M5,
@@ -45,13 +46,14 @@ class DataLoader:
 
     def load_from_csv(
         self,
+        h4_path: str,
         h1_path: str,
         m15_path: str,
         m5_path: str,
     ) -> Dict[str, pd.DataFrame]:
         """Load pre-saved CSV files (created by save_to_csv)."""
         result = {}
-        for name, path in [("H1", h1_path), ("M15", m15_path), ("M5", m5_path)]:
+        for name, path in [("H4", h4_path), ("H1", h1_path), ("M15", m15_path), ("M5", m5_path)]:
             df = pd.read_csv(path)
             df["time"] = pd.to_datetime(df["time"], utc=True)
             result[name] = df

@@ -94,7 +94,26 @@ def is_trading_session() -> bool:
     return current_session() is not None
 
 
-# ── Three-timeframe analysis (Upgrade 1) ──────────────────────────────────────
+# ── Four-timeframe analysis ────────────────────────────────────────────────────
+
+def analyse_htf(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
+    """H4: big-picture direction via MA50/MA200 — acts as a hard gate."""
+    df = fetcher.get_historical_data(config.HTF_TIMEFRAME, config.HTF_CANDLES, symbol)
+    if df.empty or len(df) < _MA_PERIODS_TREND[-1] + 5:
+        logger.warning(f"[{symbol}] Insufficient H4 data.")
+        return None
+
+    ma_df = _IND["ma"].calculate_multiple_mas(df["close"], periods=_MA_PERIODS_TREND)
+    ana   = _IND["ma"].analyze_latest(df["close"].iloc[:-1], ma_df.iloc[:-1])
+
+    return {
+        "timeframe": config.HTF_TIMEFRAME,
+        "price":     float(df["close"].iloc[-2]),
+        "ma_fast":   ana["ma_fast"],
+        "ma_slow":   ana["ma_slow"],
+        "trend":     ana["trend"],
+    }
+
 
 def analyse_trend(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """H1: establish major trend direction via MA50/MA200 crossover."""
@@ -206,37 +225,59 @@ def _confirm_agrees(confirm: Dict, h1_trend: str) -> bool:
 
 
 def generate_signal(
+    htf:     Dict,
     trend:   Dict,
     confirm: Dict,
     entry:   Dict,
 ) -> Dict[str, Any]:
+    htf_dir   = htf["trend"]
     trend_dir = trend["trend"]
     is_bull   = trend_dir in ("STRONG_BULL", "BULL")
     is_bear   = trend_dir in ("STRONG_BEAR", "BEAR")
+    htf_bull  = htf_dir in ("STRONG_BULL", "BULL")
+    htf_bear  = htf_dir in ("STRONG_BEAR", "BEAR")
     rsi       = entry["rsi"]
     bb        = entry["bb"]
-    reasons   = [f"H1: {trend_dir}"]
+    reasons   = [f"H4: {htf_dir}", f"H1: {trend_dir}"]
     score     = 0
 
-    # Volume is a hard gate (Upgrade 5) — fail immediately if below threshold
+    # ── H4 hard gate — blocks trades against the big-picture trend ────────────
+    if is_bull and htf_bear:
+        reasons.append(f"BLOCKED: H4 {htf_dir} conflicts with H1 {trend_dir}")
+        return {
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": entry["volume_ok"],
+        }
+    if is_bear and htf_bull:
+        reasons.append(f"BLOCKED: H4 {htf_dir} conflicts with H1 {trend_dir}")
+        return {
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": entry["volume_ok"],
+        }
+
+    # ── Volume hard gate ───────────────────────────────────────────────────────
     if not entry["volume_ok"]:
         reasons.append(f"BLOCKED: M5 volume below {config.VOLUME_MIN_RATIO*100:.0f}% of {config.VOLUME_LOOKBACK}-bar avg")
         return {
-            "signal":     "NEUTRAL",
-            "confidence": "LOW",
-            "score":      0,
-            "reasons":    reasons,
-            "trend":      trend_dir,
-            "rsi":        rsi,
-            "macd":       confirm["macd"],
-            "bb":         bb["position"],
-            "volume_ok":  False,
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": False,
         }
 
     signal = "NEUTRAL"
 
     if is_bull or is_bear:
-        # M15 confirmation (Upgrade 1)
+        # H4 actively confirms H1 → bonus point
+        if (is_bull and htf_bull) or (is_bear and htf_bear):
+            score += 1
+            reasons.append(f"H4 confirms {htf_dir}")
+
+        # M15 confirmation
         if _confirm_agrees(confirm, trend_dir):
             score += 1
             reasons.append(
@@ -248,13 +289,11 @@ def generate_signal(
             )
 
         if is_bull:
-            # RSI pullback zone instead of oversold (Upgrade 2)
             if _rsi_in_bull_zone(rsi):
                 score += 1
                 rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
                 reasons.append(
-                    f"RSI pullback {rsi_str} in "
-                    f"[{config.RSI_BULL_MIN}–{config.RSI_BULL_MAX}]"
+                    f"RSI pullback {rsi_str} in [{config.RSI_BULL_MIN}–{config.RSI_BULL_MAX}]"
                 )
             if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER", "WALKING_UP"):
                 score += 1
@@ -266,8 +305,7 @@ def generate_signal(
                 score += 1
                 rsi_str = f"{rsi:.1f}" if rsi is not None else "N/A"
                 reasons.append(
-                    f"RSI rally {rsi_str} in "
-                    f"[{config.RSI_BEAR_MIN}–{config.RSI_BEAR_MAX}]"
+                    f"RSI rally {rsi_str} in [{config.RSI_BEAR_MIN}–{config.RSI_BEAR_MAX}]"
                 )
             if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER", "WALKING_DOWN"):
                 score += 1
@@ -284,6 +322,7 @@ def generate_signal(
         "confidence": confidence,
         "score":      score,
         "reasons":    reasons,
+        "htf":        htf_dir,
         "trend":      trend_dir,
         "rsi":        rsi,
         "macd":       confirm["macd"],
@@ -463,6 +502,7 @@ def display_positions(positions: List[Dict]):
 def display_symbol_analysis(
     symbol:      str,
     signal_data: Dict,
+    htf:         Dict,
     trend:       Dict,
     confirm:     Dict,
     entry:       Dict,
@@ -476,6 +516,10 @@ def display_symbol_analysis(
     _line()
     print(f"  [{label}]")
     print(
+        f"  H4  Bias   : {htf['trend']:<14}  "
+        f"MA50={htf['ma_fast']:.2f}  MA200={htf['ma_slow']:.2f}"
+    )
+    print(
         f"  H1  Trend  : {trend['trend']:<14}  "
         f"MA50={trend['ma_fast']:.2f}  MA200={trend['ma_slow']:.2f}"
     )
@@ -488,7 +532,7 @@ def display_symbol_analysis(
         f"RSI={rsi_str}  BB={entry['bb']['position']}  Vol={vol_flag}"
     )
     print(
-        f"  {icon}  |  Score: {signal_data['score']}/3  |  "
+        f"  {icon}  |  Score: {signal_data['score']}/4  |  "
         f"{signal_data['confidence']}  |  "
         f"{'; '.join(signal_data['reasons'])}"
     )
@@ -530,16 +574,17 @@ def scan_symbol(
     pos_mgr:   MT5PositionManager,
     logger_db: TradeLogger,
 ) -> None:
+    htf     = analyse_htf(fetcher, symbol)
     trend   = analyse_trend(fetcher, symbol)
     confirm = analyse_confirm(fetcher, symbol)
     entry   = analyse_entry(fetcher, symbol)
 
-    if trend is None or confirm is None or entry is None:
+    if htf is None or trend is None or confirm is None or entry is None:
         print(f"  [{symbol}] Data unavailable — skipping.")
         return
 
-    signal_data = generate_signal(trend, confirm, entry)
-    display_symbol_analysis(symbol, signal_data, trend, confirm, entry)
+    signal_data = generate_signal(htf, trend, confirm, entry)
+    display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
     risk = pos_mgr.check_risk_limits(symbol=symbol)
@@ -625,7 +670,8 @@ def main():
     print("  GOLD TRADING BOT  —  MT5 MULTI-SYMBOL  v2.0")
     print(f"  Symbols    : {', '.join(config.SYMBOLS)}")
     print(
-        f"  Timeframes : {config.TREND_TIMEFRAME} trend → "
+        f"  Timeframes : {config.HTF_TIMEFRAME} bias → "
+        f"{config.TREND_TIMEFRAME} trend → "
         f"{config.CONFIRM_TIMEFRAME} confirm → {config.ENTRY_TIMEFRAME} entry"
     )
     sess_str = "  |  ".join(

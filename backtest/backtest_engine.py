@@ -79,10 +79,11 @@ class BacktestEngine:
 
     def run(self, data: Dict[str, pd.DataFrame]) -> dict:
         """
-        data must be {"H1": df, "M15": df, "M5": df}
+        data must be {"H4": df, "H1": df, "M15": df, "M5": df}
         Each df must have columns: time, open, high, low, close, volume
         'time' must be timezone-aware (UTC) pandas Timestamps.
         """
+        h4  = self._ensure_time_col(data["H4"])
         h1  = self._ensure_time_col(data["H1"])
         m15 = self._ensure_time_col(data["M15"])
         m5  = self._ensure_time_col(data["M5"]).reset_index(drop=True)
@@ -132,11 +133,14 @@ class BacktestEngine:
 
             # ── Slice context data for each timeframe ─────────────────────────
             # +1 so analyse functions can drop the forming bar with iloc[:-1]
+            h4_slice  = h4[h4["time"] <= bar_time].tail(config.HTF_CANDLES + 1)
             h1_slice  = h1[h1["time"] <= bar_time].tail(config.TREND_CANDLES + 1)
             m15_slice = m15[m15["time"] <= bar_time].tail(config.CONFIRM_CANDLES + 1)
             n_entry   = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
             m5_slice  = m5.iloc[max(0, i - n_entry + 1): i + 1]
 
+            if len(h4_slice) < _MA_PERIODS_TREND[-1] + 6:
+                continue
             if len(h1_slice) < _MA_PERIODS_TREND[-1] + 6:
                 continue
             if len(m15_slice) < 61:
@@ -144,15 +148,16 @@ class BacktestEngine:
             if len(m5_slice) < 30:
                 continue
 
-            # ── Three-timeframe analysis ──────────────────────────────────────
+            # ── Four-timeframe analysis ───────────────────────────────────────
+            htf     = self._analyse_htf(h4_slice)
             trend   = self._analyse_trend(h1_slice)
             confirm = self._analyse_confirm(m15_slice)
             entry_a = self._analyse_entry(m5_slice)
 
-            if not trend or not confirm or not entry_a:
+            if not htf or not trend or not confirm or not entry_a:
                 continue
 
-            sig_data = self._generate_signal(trend, confirm, entry_a)
+            sig_data = self._generate_signal(htf, trend, confirm, entry_a)
             if sig_data["signal"] == "NEUTRAL":
                 continue
 
@@ -324,6 +329,18 @@ class BacktestEngine:
 
     # ── Analysis (mirrors main_mt5.py) ────────────────────────────────────────
 
+    def _analyse_htf(self, h4_slice: pd.DataFrame) -> Optional[Dict]:
+        """H4: big-picture direction via MA50/MA200 — acts as a hard gate."""
+        ma_df = _IND["ma"].calculate_multiple_mas(h4_slice["close"], periods=_MA_PERIODS_TREND)
+        ana   = _IND["ma"].analyze_latest(
+            h4_slice["close"].iloc[:-1], ma_df.iloc[:-1]
+        )
+        return {
+            "trend":   ana["trend"],
+            "ma_fast": ana["ma_fast"],
+            "ma_slow": ana["ma_slow"],
+        }
+
     def _analyse_trend(self, h1_slice: pd.DataFrame) -> Optional[Dict]:
         """
         H1: MA50 / MA200 crossover for trend direction.
@@ -379,16 +396,24 @@ class BacktestEngine:
 
     def _generate_signal(
         self,
+        htf:     dict,
         trend:   dict,
         confirm: dict,
         entry:   dict,
     ) -> dict:
-        """Exact copy of generate_signal() from main_mt5.py."""
+        """Mirrors generate_signal() from main_mt5.py exactly."""
+        htf_dir   = htf["trend"]
         trend_dir = trend["trend"]
         is_bull   = trend_dir in ("STRONG_BULL", "BULL")
         is_bear   = trend_dir in ("STRONG_BEAR", "BEAR")
+        htf_bull  = htf_dir in ("STRONG_BULL", "BULL")
+        htf_bear  = htf_dir in ("STRONG_BEAR", "BEAR")
         rsi       = entry["rsi"]
         score     = 0
+
+        # H4 hard gate
+        if (is_bull and htf_bear) or (is_bear and htf_bull):
+            return {"signal": "NEUTRAL", "score": 0}
 
         if not entry["volume_ok"]:
             return {"signal": "NEUTRAL", "score": 0}
@@ -396,9 +421,12 @@ class BacktestEngine:
         signal = "NEUTRAL"
 
         if is_bull or is_bear:
+            # H4 actively confirms → bonus point
+            if (is_bull and htf_bull) or (is_bear and htf_bear):
+                score += 1
+
             ma_bull = confirm["ma_trend"] in ("STRONG_BULL", "BULL")
             ma_bear = confirm["ma_trend"] in ("STRONG_BEAR", "BEAR")
-
             if is_bull and (ma_bull or confirm["macd"] == "BUY"):
                 score += 1
             elif is_bear and (ma_bear or confirm["macd"] == "SELL"):

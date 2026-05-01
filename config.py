@@ -23,11 +23,13 @@ _symbols_raw = os.getenv("MT5_SYMBOLS", os.getenv("MT5_SYMBOL", "GOLD"))
 SYMBOLS      = [s.strip() for s in _symbols_raw.split(",") if s.strip()]
 SYMBOL       = SYMBOLS[0]
 
-# ── Three-Timeframe System ─────────────────────────────────────────────────────
+# ── Four-Timeframe System ──────────────────────────────────────────────────────
+HTF_TIMEFRAME     = "H4"    # big-picture direction (hard gate)
 TREND_TIMEFRAME   = "H1"    # major trend direction
 CONFIRM_TIMEFRAME = "M15"   # trend confirmation
 ENTRY_TIMEFRAME   = "M5"    # entry signals
 
+HTF_CANDLES     = 250   # needs 200+ for MA200 on H4
 TREND_CANDLES   = 250   # needs 200+ for MA200 on H1
 CONFIRM_CANDLES = 100
 ENTRY_CANDLES   = 100
