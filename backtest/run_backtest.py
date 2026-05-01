@@ -3,17 +3,18 @@ Run the Gold Bot backtest.
 
 Usage (from repo root):
 
-  # Live data from MT5 terminal:
-  python backtest/run_backtest.py
+  # JPY account (FxPro demo) — balance in JPY, USDJPY rate needed:
+  py backtest\run_backtest.py --currency JPY --fx-rate 150 --balance 1000000
 
-  # From saved CSV files (after first run with --save):
-  python backtest/run_backtest.py --csv
+  # USD account:
+  py backtest\run_backtest.py --balance 10000
 
-  # Save data to CSV then run:
-  python backtest/run_backtest.py --save
+  # Save MT5 data to CSV then reuse offline:
+  py backtest\run_backtest.py --save --currency JPY --fx-rate 150 --balance 1000000
+  py backtest\run_backtest.py --csv  --currency JPY --fx-rate 150 --balance 1000000
 
-  # Override balance or bars:
-  python backtest/run_backtest.py --balance 50000 --bars 100000
+  # Custom bars:
+  py backtest\run_backtest.py --bars 100000 --currency JPY --fx-rate 150 --balance 1000000
 """
 import sys
 import os
@@ -27,9 +28,15 @@ from backtest.data_loader     import DataLoader
 
 def parse_args():
     p = argparse.ArgumentParser(description="Gold Bot Backtest")
-    p.add_argument("--symbol",  default=config.SYMBOL,   help="Symbol (default: from config)")
-    p.add_argument("--balance", type=float, default=10_000.0, help="Starting balance USD")
-    p.add_argument("--bars",    type=int,   default=50_000,   help="Bars to load per timeframe")
+    p.add_argument("--symbol",   default=config.SYMBOL,  help="Symbol (default: from config)")
+    p.add_argument("--balance",  type=float, default=10_000.0,
+                   help="Starting balance in your account currency")
+    p.add_argument("--currency", default="USD",
+                   help="Account currency, e.g. JPY or USD (default: USD)")
+    p.add_argument("--fx-rate",  type=float, default=1.0,
+                   help="Units of account currency per 1 USD. e.g. 150 for JPY. (default: 1.0)")
+    p.add_argument("--bars",     type=int, default=50_000,
+                   help="Bars to load per timeframe (default: 50000)")
     p.add_argument("--csv",  action="store_true", help="Load from saved CSV files")
     p.add_argument("--save", action="store_true", help="Save MT5 data to CSV then run")
     p.add_argument("--h1",  default="backtest_H1.csv",  help="H1 CSV path")
@@ -39,15 +46,17 @@ def parse_args():
 
 
 def main():
-    args    = parse_args()
-    symbol  = args.symbol
-    loader  = DataLoader()
+    args   = parse_args()
+    symbol = args.symbol
+    ccy    = args.currency.upper()
+    loader = DataLoader()
 
     print("\n" + "=" * 55)
     print("  GOLD BOT BACKTEST")
-    print(f"  Symbol  : {symbol}")
-    print(f"  Balance : ${args.balance:,.0f}")
-    print(f"  Bars    : {args.bars:,} per timeframe")
+    print(f"  Symbol   : {symbol}")
+    print(f"  Balance  : {args.balance:,.0f} {ccy}")
+    print(f"  FX rate  : 1 USD = {args.fx_rate} {ccy}")
+    print(f"  Bars     : {args.bars:,} per timeframe")
     print("=" * 55)
 
     if args.csv:
@@ -87,8 +96,12 @@ def main():
         finally:
             mt5.shutdown()
 
-    engine = BacktestEngine(initial_balance=args.balance)
-    stats  = engine.run(data)
+    engine = BacktestEngine(
+        initial_balance  = args.balance,
+        account_currency = ccy,
+        fx_rate          = args.fx_rate,
+    )
+    stats = engine.run(data)
     engine.print_report(stats)
 
 

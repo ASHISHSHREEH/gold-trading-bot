@@ -54,13 +54,25 @@ class BacktestEngine:
 
     def __init__(
         self,
-        initial_balance: float  = 10_000.0,
-        risk_per_trade:  float  = None,
-        commission:      float  = COMMISSION_PER_LOT,
+        initial_balance:  float = 10_000.0,
+        account_currency: str   = "USD",
+        fx_rate:          float = 1.0,
+        risk_per_trade:   float = None,
+        commission:       float = COMMISSION_PER_LOT,
     ):
-        self.initial_balance = initial_balance
-        self.risk_per_trade  = risk_per_trade or config.RISK_PER_TRADE
-        self.commission      = commission
+        """
+        initial_balance  — in your account currency (JPY, USD, etc.)
+        account_currency — e.g. "JPY" or "USD"
+        fx_rate          — units of account currency per 1 USD
+                           e.g. 150.0 for a JPY account when USDJPY = 150
+                           1.0 for a USD account (default)
+        commission       — round-trip commission per lot in USD
+        """
+        self.initial_balance  = initial_balance
+        self.account_currency = account_currency.upper()
+        self.fx_rate          = fx_rate          # acct_ccy per USD
+        self.risk_per_trade   = risk_per_trade or config.RISK_PER_TRADE
+        self.commission       = commission
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -81,8 +93,10 @@ class BacktestEngine:
 
         warmup = 200
         total  = len(m5) - warmup
+        ccy = self.account_currency
         print(f"\n[*] Backtesting {total:,} M5 bars  "
               f"({m5['time'].iloc[warmup].date()} → {m5['time'].iloc[-1].date()})")
+        print(f"    Account: {ccy}  FX rate: 1 USD = {self.fx_rate} {ccy}")
         print(f"    Risk/trade={self.risk_per_trade:.1%}  "
               f"Commission=${self.commission}/lot  "
               f"Spread=${SPREAD_COST}")
@@ -94,7 +108,7 @@ class BacktestEngine:
             if i % 5000 == 0 and i > warmup:
                 pct = (i - warmup) / total * 100
                 print(f"    {pct:.0f}%  bar {i:,}/{len(m5):,}  "
-                      f"balance=${balance:,.2f}  trades={len(trades)}")
+                      f"balance={balance:,.0f} {self.account_currency}  trades={len(trades)}")
 
             bar      = m5.iloc[i]
             bar_time = bar["time"]
@@ -161,7 +175,10 @@ class BacktestEngine:
             if rr < config.MIN_RR_RATIO - 0.001:
                 continue
 
-            risk_amount = balance * self.risk_per_trade
+            # Convert account balance to USD for lot sizing
+            # (gold P&L is always USD; fx_rate = acct_ccy per 1 USD)
+            balance_usd = balance / self.fx_rate
+            risk_amount = balance_usd * self.risk_per_trade
             raw_lots    = risk_amount / (risk_dist * CONTRACT_SIZE)
             lots        = round((raw_lots // LOT_STEP) * LOT_STEP, 8)
             lots        = max(MIN_LOT, min(lots, MAX_LOT))
@@ -190,7 +207,7 @@ class BacktestEngine:
             pnl = (self._calc_pnl(active["signal"], active["entry"],
                                   close_price, active["remaining_lots"])
                    + active["partial_pnl"]
-                   - self.commission * active["remaining_lots"])
+                   - self.commission * active["remaining_lots"] * self.fx_rate)
             trades.append({**active, "pnl": round(pnl, 2),
                            "result": "TIME_EXIT", "exit_price": close_price})
             balance += pnl
@@ -242,7 +259,7 @@ class BacktestEngine:
                 half = max(MIN_LOT, half)
 
                 pnl_half = (self._calc_pnl(sig, entry, one_r_price, half)
-                            - self.commission * half)
+                            - self.commission * half * self.fx_rate)
 
                 active["partial_pnl"]    = pnl_half
                 active["remaining_lots"] = round(active["lots"] - half, 8)
@@ -270,7 +287,7 @@ class BacktestEngine:
         if hit_tp:
             pnl = (self._calc_pnl(sig, entry, active["tp"], active["remaining_lots"])
                    + active["partial_pnl"]
-                   - self.commission * active["remaining_lots"])
+                   - self.commission * active["remaining_lots"] * self.fx_rate)
             closed.append({**active, "pnl": round(pnl, 2),
                            "result": "WIN", "exit_price": active["tp"]})
             return None, closed
@@ -279,7 +296,7 @@ class BacktestEngine:
             exit_price = current_sl if hit_sl else float(bar["close"])
             pnl = (self._calc_pnl(sig, entry, exit_price, active["remaining_lots"])
                    + active["partial_pnl"]
-                   - self.commission * active["remaining_lots"])
+                   - self.commission * active["remaining_lots"] * self.fx_rate)
             result = ("TIME_EXIT" if timeout
                       else ("WIN_BE" if pnl > 0 else "LOSS"))
             closed.append({**active, "pnl": round(pnl, 2),
@@ -403,11 +420,16 @@ class BacktestEngine:
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    @staticmethod
-    def _calc_pnl(signal: str, entry: float, exit_price: float, lots: float) -> float:
-        """Unified P&L: direction × price_diff × contract_size × lots."""
-        direction = 1 if signal == "BUY" else -1
-        return direction * (exit_price - entry) * CONTRACT_SIZE * lots
+    def _calc_pnl(self, signal: str, entry: float, exit_price: float, lots: float) -> float:
+        """
+        Unified P&L in account currency.
+        Gold P&L is always USD first, then converted via fx_rate.
+        fx_rate = account_currency per 1 USD (e.g. 150 for JPY).
+        Commission is in USD/lot and also converted.
+        """
+        direction  = 1 if signal == "BUY" else -1
+        pnl_usd    = direction * (exit_price - entry) * CONTRACT_SIZE * lots
+        return pnl_usd * self.fx_rate
 
     @staticmethod
     def _ensure_time_col(df: pd.DataFrame) -> pd.DataFrame:
@@ -483,7 +505,8 @@ class BacktestEngine:
             print(line)
             return
 
-        rc = stats.get("result_counts", {})
+        ccy = self.account_currency
+        rc  = stats.get("result_counts", {})
         print(f"  Total Trades   : {stats['total_trades']}")
         print(f"  Wins / Losses  : {stats['wins']}W  /  {stats['losses']}L")
         print(f"    WIN           : {rc.get('WIN', 0)}")
@@ -493,11 +516,11 @@ class BacktestEngine:
         print(f"  Win Rate       : {stats['win_rate']}%")
         print(f"  Profit Factor  : {stats['profit_factor']}")
         print(f"  Avg R:R        : {stats['avg_rr']}")
-        print(f"  Avg Trade P&L  : ${stats['avg_trade_pnl']:,.2f}")
+        print(f"  Avg Trade P&L  : {stats['avg_trade_pnl']:,.0f} {ccy}")
         print(line)
         print(f"  Total Return   : {stats['total_return']}%")
-        print(f"  Final Balance  : ${stats['final_balance']:,.2f}")
-        print(f"  Total P&L      : ${stats['total_pnl']:,.2f}")
+        print(f"  Final Balance  : {stats['final_balance']:,.0f} {ccy}")
+        print(f"  Total P&L      : {stats['total_pnl']:,.0f} {ccy}")
         print(f"  Max Drawdown   : {stats['max_drawdown']}%")
         print(f"  Sharpe Ratio   : {stats['sharpe']}  (annualised)")
         print(line)
