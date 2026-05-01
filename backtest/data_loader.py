@@ -26,6 +26,7 @@ class DataLoader:
             "H1":  mt5.TIMEFRAME_H1,
             "M15": mt5.TIMEFRAME_M15,
             "M5":  mt5.TIMEFRAME_M5,
+            "M1":  mt5.TIMEFRAME_M1,
         }
 
         result = {}
@@ -50,10 +51,11 @@ class DataLoader:
         h1_path: str,
         m15_path: str,
         m5_path: str,
+        m1_path: str,
     ) -> Dict[str, pd.DataFrame]:
         """Load pre-saved CSV files (created by save_to_csv)."""
         result = {}
-        for name, path in [("H4", h4_path), ("H1", h1_path), ("M15", m15_path), ("M5", m5_path)]:
+        for name, path in [("H4", h4_path), ("H1", h1_path), ("M15", m15_path), ("M5", m5_path), ("M1", m1_path)]:
             df = pd.read_csv(path)
             df["time"] = pd.to_datetime(df["time"], utc=True)
             result[name] = df

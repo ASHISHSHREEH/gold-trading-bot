@@ -197,7 +197,40 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     }
 
 
-# ── Signal generation (Upgrade 1 + 2) ─────────────────────────────────────────
+def analyse_timing(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
+    """M1: final entry timing — MACD momentum + RSI direction."""
+    df = fetcher.get_historical_data(config.TIMING_TIMEFRAME, config.TIMING_CANDLES, symbol)
+    if df.empty or len(df) < 40:
+        logger.warning(f"[{symbol}] Insufficient M1 data.")
+        return None
+
+    macd_df  = _IND["macd"].calculate_macd(df)
+    macd_ana = _IND["macd"].analyze_latest(macd_df)
+    rsi_s    = _IND["rsi"].calculate_rsi(df)
+    rsi_val  = float(rsi_s.iloc[-1]) if not rsi_s.isna().iloc[-1] else None
+
+    # Combine MACD + RSI midline (50) for M1 momentum direction
+    macd_bull = macd_ana["signal"] in ("BUY",)
+    macd_bear = macd_ana["signal"] in ("SELL",)
+    rsi_bull  = rsi_val is not None and rsi_val > 50
+    rsi_bear  = rsi_val is not None and rsi_val < 50
+
+    if macd_bull and rsi_bull:
+        direction = "BULL"
+    elif macd_bear and rsi_bear:
+        direction = "BEAR"
+    else:
+        direction = "NEUTRAL"
+
+    return {
+        "timeframe": config.TIMING_TIMEFRAME,
+        "macd":      macd_ana["signal"],
+        "rsi":       round(rsi_val, 1) if rsi_val is not None else None,
+        "direction": direction,
+    }
+
+
+# ── Signal generation ──────────────────────────────────────────────────────────
 
 def _rsi_in_bull_zone(rsi: Optional[float]) -> bool:
     if rsi is None:
@@ -229,6 +262,7 @@ def generate_signal(
     trend:   Dict,
     confirm: Dict,
     entry:   Dict,
+    timing:  Dict,
 ) -> Dict[str, Any]:
     htf_dir   = htf["trend"]
     trend_dir = trend["trend"]
@@ -315,7 +349,22 @@ def generate_signal(
     else:
         reasons.append("No clear H1 trend — standing aside")
 
-    confidence = "HIGH" if score >= 3 else ("MODERATE" if score == 2 else "LOW")
+    # M1 timing confirmation — adds +1 if momentum agrees
+    if signal != "NEUTRAL":
+        t_dir = timing["direction"]
+        rsi_str = f"{timing['rsi']}" if timing["rsi"] is not None else "N/A"
+        if (signal == "BUY"  and t_dir == "BULL") or \
+           (signal == "SELL" and t_dir == "BEAR"):
+            score += 1
+            reasons.append(
+                f"M1 timing {t_dir} (MACD={timing['macd']} RSI={rsi_str})"
+            )
+        else:
+            reasons.append(
+                f"M1 timing {t_dir} (MACD={timing['macd']} RSI={rsi_str})"
+            )
+
+    confidence = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
 
     return {
         "signal":     signal,
@@ -328,6 +377,7 @@ def generate_signal(
         "macd":       confirm["macd"],
         "bb":         bb["position"],
         "volume_ok":  entry["volume_ok"],
+        "m1":         timing["direction"],
     }
 
 
@@ -506,11 +556,13 @@ def display_symbol_analysis(
     trend:       Dict,
     confirm:     Dict,
     entry:       Dict,
+    timing:      Dict,
 ):
     label    = _SYMBOL_LABELS.get(symbol, symbol)
     sig      = signal_data["signal"]
     icon     = {"BUY": "▲ BUY", "SELL": "▼ SELL", "NEUTRAL": "● NEUTRAL"}[sig]
     rsi_str  = f"{entry['rsi']:.1f}" if entry["rsi"] is not None else "N/A"
+    m1_rsi   = f"{timing['rsi']}" if timing["rsi"] is not None else "N/A"
     vol_flag = "✓" if entry["volume_ok"] else "✗"
 
     _line()
@@ -532,7 +584,11 @@ def display_symbol_analysis(
         f"RSI={rsi_str}  BB={entry['bb']['position']}  Vol={vol_flag}"
     )
     print(
-        f"  {icon}  |  Score: {signal_data['score']}/4  |  "
+        f"  M1  Timing : {timing['direction']:<14}  "
+        f"MACD={timing['macd']}  RSI={m1_rsi}"
+    )
+    print(
+        f"  {icon}  |  Score: {signal_data['score']}/5  |  "
         f"{signal_data['confidence']}  |  "
         f"{'; '.join(signal_data['reasons'])}"
     )
@@ -578,13 +634,14 @@ def scan_symbol(
     trend   = analyse_trend(fetcher, symbol)
     confirm = analyse_confirm(fetcher, symbol)
     entry   = analyse_entry(fetcher, symbol)
+    timing  = analyse_timing(fetcher, symbol)
 
-    if htf is None or trend is None or confirm is None or entry is None:
+    if htf is None or trend is None or confirm is None or entry is None or timing is None:
         print(f"  [{symbol}] Data unavailable — skipping.")
         return
 
-    signal_data = generate_signal(htf, trend, confirm, entry)
-    display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry)
+    signal_data = generate_signal(htf, trend, confirm, entry, timing)
+    display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
     risk = pos_mgr.check_risk_limits(symbol=symbol)
@@ -672,7 +729,8 @@ def main():
     print(
         f"  Timeframes : {config.HTF_TIMEFRAME} bias → "
         f"{config.TREND_TIMEFRAME} trend → "
-        f"{config.CONFIRM_TIMEFRAME} confirm → {config.ENTRY_TIMEFRAME} entry"
+        f"{config.CONFIRM_TIMEFRAME} confirm → "
+        f"{config.ENTRY_TIMEFRAME} entry → {config.TIMING_TIMEFRAME} timing"
     )
     sess_str = "  |  ".join(
         f"{k} {v[0]:02d}:00–{v[1]:02d}:00 UTC"

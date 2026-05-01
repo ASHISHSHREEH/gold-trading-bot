@@ -79,7 +79,7 @@ class BacktestEngine:
 
     def run(self, data: Dict[str, pd.DataFrame]) -> dict:
         """
-        data must be {"H4": df, "H1": df, "M15": df, "M5": df}
+        data must be {"H4": df, "H1": df, "M15": df, "M5": df, "M1": df}
         Each df must have columns: time, open, high, low, close, volume
         'time' must be timezone-aware (UTC) pandas Timestamps.
         """
@@ -87,6 +87,7 @@ class BacktestEngine:
         h1  = self._ensure_time_col(data["H1"])
         m15 = self._ensure_time_col(data["M15"])
         m5  = self._ensure_time_col(data["M5"]).reset_index(drop=True)
+        m1  = self._ensure_time_col(data["M1"])
 
         balance      = self.initial_balance
         equity_curve = []
@@ -138,6 +139,7 @@ class BacktestEngine:
             m15_slice = m15[m15["time"] <= bar_time].tail(config.CONFIRM_CANDLES + 1)
             n_entry   = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
             m5_slice  = m5.iloc[max(0, i - n_entry + 1): i + 1]
+            m1_slice  = m1[m1["time"] <= bar_time].tail(config.TIMING_CANDLES)
 
             if len(h4_slice) < _MA_PERIODS_TREND[-1] + 6:
                 continue
@@ -147,17 +149,20 @@ class BacktestEngine:
                 continue
             if len(m5_slice) < 30:
                 continue
+            if len(m1_slice) < 40:
+                continue
 
-            # ── Four-timeframe analysis ───────────────────────────────────────
+            # ── Five-timeframe analysis ───────────────────────────────────────
             htf     = self._analyse_htf(h4_slice)
             trend   = self._analyse_trend(h1_slice)
             confirm = self._analyse_confirm(m15_slice)
             entry_a = self._analyse_entry(m5_slice)
+            timing  = self._analyse_timing(m1_slice)
 
-            if not htf or not trend or not confirm or not entry_a:
+            if not htf or not trend or not confirm or not entry_a or not timing:
                 continue
 
-            sig_data = self._generate_signal(htf, trend, confirm, entry_a)
+            sig_data = self._generate_signal(htf, trend, confirm, entry_a, timing)
             if sig_data["signal"] == "NEUTRAL":
                 continue
 
@@ -394,12 +399,38 @@ class BacktestEngine:
             "volume_ok": volume_ok,
         }
 
+    def _analyse_timing(self, m1_slice: pd.DataFrame) -> Optional[Dict]:
+        """M1: final entry timing via MACD momentum + RSI midline."""
+        macd_df  = _IND["macd"].calculate_macd(m1_slice)
+        macd_ana = _IND["macd"].analyze_latest(macd_df)
+        rsi_s    = _IND["rsi"].calculate_rsi(m1_slice)
+        rsi_val  = float(rsi_s.iloc[-1]) if not rsi_s.isna().iloc[-1] else None
+
+        macd_bull = macd_ana["signal"] == "BUY"
+        macd_bear = macd_ana["signal"] == "SELL"
+        rsi_bull  = rsi_val is not None and rsi_val > 50
+        rsi_bear  = rsi_val is not None and rsi_val < 50
+
+        if macd_bull and rsi_bull:
+            direction = "BULL"
+        elif macd_bear and rsi_bear:
+            direction = "BEAR"
+        else:
+            direction = "NEUTRAL"
+
+        return {
+            "macd":      macd_ana["signal"],
+            "rsi":       round(rsi_val, 1) if rsi_val is not None else None,
+            "direction": direction,
+        }
+
     def _generate_signal(
         self,
         htf:     dict,
         trend:   dict,
         confirm: dict,
         entry:   dict,
+        timing:  dict,
     ) -> dict:
         """Mirrors generate_signal() from main_mt5.py exactly."""
         htf_dir   = htf["trend"]
@@ -421,7 +452,6 @@ class BacktestEngine:
         signal = "NEUTRAL"
 
         if is_bull or is_bear:
-            # H4 actively confirms → bonus point
             if (is_bull and htf_bull) or (is_bear and htf_bear):
                 score += 1
 
@@ -444,6 +474,13 @@ class BacktestEngine:
                 if entry["bb"].get("position") in ("NEAR_UPPER", "ABOVE_UPPER", "WALKING_DOWN"):
                     score += 1
                 signal = "SELL" if score >= 2 else "NEUTRAL"
+
+        # M1 timing bonus
+        if signal != "NEUTRAL":
+            t_dir = timing["direction"]
+            if (signal == "BUY" and t_dir == "BULL") or \
+               (signal == "SELL" and t_dir == "BEAR"):
+                score += 1
 
         return {"signal": signal, "score": score}
 

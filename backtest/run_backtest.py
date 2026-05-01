@@ -43,6 +43,7 @@ def parse_args():
     p.add_argument("--h1",  default="backtest_H1.csv",  help="H1 CSV path")
     p.add_argument("--m15", default="backtest_M15.csv", help="M15 CSV path")
     p.add_argument("--m5",  default="backtest_M5.csv",  help="M5 CSV path")
+    p.add_argument("--m1",  default="backtest_M1.csv",  help="M1 CSV path")
     return p.parse_args()
 
 
@@ -67,6 +68,7 @@ def main():
             h1_path  = args.h1,
             m15_path = args.m15,
             m5_path  = args.m5,
+            m1_path  = args.m1,
         )
     else:
         print("\n[*] Connecting to MT5...")
