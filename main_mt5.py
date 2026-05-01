@@ -60,7 +60,8 @@ _IND = {
     "bb":   BollingerBandsCalculator(period=20, std_dev=2),
     "ma":   MovingAverageCalculator(),
 }
-_MA_PERIODS = [20, 50]
+_MA_PERIODS_TREND = [50, 200]   # H1 — slow, reliable trend filter
+_MA_PERIODS_ENTRY = [20, 50]    # M15/M5 — faster, for confirmation
 
 _SYMBOL_LABELS = {
     "GOLD":       "Gold   (XAU)",
@@ -96,13 +97,13 @@ def is_trading_session() -> bool:
 # ── Three-timeframe analysis (Upgrade 1) ──────────────────────────────────────
 
 def analyse_trend(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
-    """H1: establish major trend direction via MA20/MA50 crossover."""
+    """H1: establish major trend direction via MA50/MA200 crossover."""
     df = fetcher.get_historical_data(config.TREND_TIMEFRAME, config.TREND_CANDLES, symbol)
-    if df.empty or len(df) < _MA_PERIODS[-1] + 5:
+    if df.empty or len(df) < _MA_PERIODS_TREND[-1] + 5:
         logger.warning(f"[{symbol}] Insufficient H1 data.")
         return None
 
-    ma_df = _IND["ma"].calculate_multiple_mas(df["close"], periods=_MA_PERIODS)
+    ma_df = _IND["ma"].calculate_multiple_mas(df["close"], periods=_MA_PERIODS_TREND)
     df    = df.join(ma_df)
     ana   = _IND["ma"].analyze_latest(df["close"].iloc[:-1], ma_df.iloc[:-1])
 
@@ -123,7 +124,7 @@ def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, 
         logger.warning(f"[{symbol}] Insufficient M15 data.")
         return None
 
-    ma_df   = _IND["ma"].calculate_multiple_mas(df["close"], periods=_MA_PERIODS)
+    ma_df   = _IND["ma"].calculate_multiple_mas(df["close"], periods=_MA_PERIODS_ENTRY)
     df      = df.join(ma_df)
     macd_df = _IND["macd"].calculate_macd(df)
     df      = df.join(macd_df)
@@ -476,7 +477,7 @@ def display_symbol_analysis(
     print(f"  [{label}]")
     print(
         f"  H1  Trend  : {trend['trend']:<14}  "
-        f"MA20={trend['ma_fast']:.2f}  MA50={trend['ma_slow']:.2f}"
+        f"MA50={trend['ma_fast']:.2f}  MA200={trend['ma_slow']:.2f}"
     )
     print(
         f"  M15 Confirm: {confirm['ma_trend']:<14}  "

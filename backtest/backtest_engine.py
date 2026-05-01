@@ -38,7 +38,8 @@ MIN_LOT            = 0.01
 MAX_LOT            = 50.0
 MAX_BARS_HELD      = 200    # force-close after this many M5 bars (~17 hours)
 
-_MA_PERIODS = [20, 50]
+_MA_PERIODS_TREND = [50, 200]   # H1 — slow, reliable trend filter
+_MA_PERIODS_ENTRY = [20, 50]    # M15 — faster, for confirmation
 
 # One shared set of indicator instances (stateless calculators)
 _IND = {
@@ -136,7 +137,7 @@ class BacktestEngine:
             n_entry   = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
             m5_slice  = m5.iloc[max(0, i - n_entry + 1): i + 1]
 
-            if len(h1_slice) < _MA_PERIODS[-1] + 6:
+            if len(h1_slice) < _MA_PERIODS_TREND[-1] + 6:
                 continue
             if len(m15_slice) < 61:
                 continue
@@ -325,10 +326,10 @@ class BacktestEngine:
 
     def _analyse_trend(self, h1_slice: pd.DataFrame) -> Optional[Dict]:
         """
-        H1: MA20 / MA50 crossover for trend direction.
+        H1: MA50 / MA200 crossover for trend direction.
         Uses iloc[:-1] to exclude the current forming H1 bar — same as live bot.
         """
-        ma_df = _IND["ma"].calculate_multiple_mas(h1_slice["close"], periods=_MA_PERIODS)
+        ma_df = _IND["ma"].calculate_multiple_mas(h1_slice["close"], periods=_MA_PERIODS_TREND)
         ana   = _IND["ma"].analyze_latest(
             h1_slice["close"].iloc[:-1], ma_df.iloc[:-1]
         )
@@ -339,8 +340,8 @@ class BacktestEngine:
         }
 
     def _analyse_confirm(self, m15_slice: pd.DataFrame) -> Optional[Dict]:
-        """M15: MA structure + MACD direction to confirm H1 trend."""
-        ma_df   = _IND["ma"].calculate_multiple_mas(m15_slice["close"], periods=_MA_PERIODS)
+        """M15: MA20/MA50 structure + MACD direction to confirm H1 trend."""
+        ma_df   = _IND["ma"].calculate_multiple_mas(m15_slice["close"], periods=_MA_PERIODS_ENTRY)
         macd_df = _IND["macd"].calculate_macd(m15_slice)
         ma_ana   = _IND["ma"].analyze_latest(
             m15_slice["close"].iloc[:-1], ma_df.iloc[:-1]

@@ -28,7 +28,7 @@ TREND_TIMEFRAME   = "H1"    # major trend direction
 CONFIRM_TIMEFRAME = "M15"   # trend confirmation
 ENTRY_TIMEFRAME   = "M5"    # entry signals
 
-TREND_CANDLES   = 100
+TREND_CANDLES   = 250   # needs 200+ for MA200 on H1
 CONFIRM_CANDLES = 100
 ENTRY_CANDLES   = 100
 
