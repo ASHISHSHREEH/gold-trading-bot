@@ -75,7 +75,7 @@ class MT5Executor:
             logger.warning(f"[{symbol}] R:R {rr:.2f} < {config.MIN_RR_RATIO}. Blocked.")
             return None
 
-        lots = self._calculate_lots(price, sl, acct["balance"], sym_info)
+        lots = self._calculate_lots(price, sl, acct["balance"], sym_info, acct.get("currency", "USD"))
         if lots == 0.0:
             return None
 
@@ -301,15 +301,45 @@ class MT5Executor:
             return mt5.ORDER_FILLING_IOC
         return mt5.ORDER_FILLING_RETURN  # default — most brokers accept this
 
-    def _calculate_lots(self, price, sl, balance, sym_info) -> float:
+    def _get_fx_rate(self, account_currency: str) -> float:
+        """
+        Return live units of account_currency per 1 USD by querying MT5.
+        Tries USDJPY, USDJPYm, USD/JPY style symbols in order.
+        Falls back to config.ACCOUNT_FX_RATE if MT5 cannot provide the rate.
+        """
+        if mt5 is None or account_currency.upper() == "USD":
+            return 1.0
+
+        ccy = account_currency.upper()
+        candidates = [
+            f"USD{ccy}",
+            f"USD{ccy}m",
+            f"USD/{ccy}",
+            f"USD.{ccy}",
+        ]
+
+        for sym in candidates:
+            tick = mt5.symbol_info_tick(sym)
+            if tick and tick.bid > 0:
+                rate = (tick.bid + tick.ask) / 2.0
+                logger.debug(f"Live FX rate from {sym}: 1 USD = {rate:.4f} {ccy}")
+                return rate
+
+        logger.debug(
+            f"Could not fetch live USD/{ccy} rate from MT5 — "
+            f"using config ACCOUNT_FX_RATE={config.ACCOUNT_FX_RATE}"
+        )
+        return config.ACCOUNT_FX_RATE
+
+    def _calculate_lots(self, price, sl, balance, sym_info, account_currency: str = "USD") -> float:
         sl_distance   = abs(price - sl)
         contract_size = sym_info["contract_size"]
         if sl_distance == 0 or contract_size == 0:
             return 0.0
 
-        # Convert account balance to USD before calculating risk.
-        # ACCOUNT_FX_RATE is units of account currency per 1 USD (e.g. 150 for JPY).
-        balance_usd = balance / config.ACCOUNT_FX_RATE
+        # Convert account balance to USD using live FX rate.
+        fx_rate     = self._get_fx_rate(account_currency)
+        balance_usd = balance / fx_rate
         raw_lots    = (balance_usd * config.RISK_PER_TRADE) / (sl_distance * contract_size)
         return self._round_lots(raw_lots, sym_info)
 
