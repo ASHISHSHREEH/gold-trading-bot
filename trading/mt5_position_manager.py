@@ -124,6 +124,69 @@ class MT5PositionManager:
             "account":        acct,
         }
 
+    # ── Closed Deal Detection (for AI online learning) ─────────────────────────
+
+    def get_recently_closed_deals(
+        self,
+        since_epoch: float,
+        magic: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Query MT5 deal history for closed deals since a given unix timestamp.
+        Used by the AI learning engine to detect position closes and retrieve
+        realised P&L, entry/exit prices.
+
+        Args:
+            since_epoch : unix timestamp to search from
+            magic       : filter by magic number (defaults to config.MAGIC)
+
+        Returns:
+            list of deal dicts with keys:
+              ticket, order, symbol, direction, entry_price, exit_price,
+              profit, volume, close_time_epoch, rr_achieved (if SL known)
+        """
+        if mt5 is None:
+            return []
+
+        use_magic = magic if magic is not None else config.MAGIC
+        from datetime import datetime, timezone
+
+        try:
+            from_dt = datetime.fromtimestamp(since_epoch, tz=timezone.utc)
+            to_dt   = datetime.now(timezone.utc)
+            deals   = mt5.history_deals_get(from_dt, to_dt)
+        except Exception as exc:
+            logger.warning("get_recently_closed_deals: MT5 query failed — %s", exc)
+            return []
+
+        if deals is None:
+            return []
+
+        results = []
+        for d in deals:
+            if d.magic != use_magic:
+                continue
+            # Only closing deals (entry_type == DEAL_ENTRY_OUT or DEAL_ENTRY_INOUT)
+            if not hasattr(mt5, "DEAL_ENTRY_OUT"):
+                continue
+            if d.entry not in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT):
+                continue
+
+            direction = "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL"
+            results.append({
+                "ticket":            d.position_id,
+                "deal_ticket":       d.ticket,
+                "symbol":            d.symbol,
+                "direction":         direction,
+                "exit_price":        d.price,
+                "profit":            d.profit,
+                "volume":            d.volume,
+                "close_time_epoch":  float(d.time),
+                "comment":           d.comment,
+            })
+
+        return results
+
     # ── Emergency Flatten ──────────────────────────────────────────────────────
 
     def close_all_positions(self, executor) -> int:

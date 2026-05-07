@@ -81,6 +81,39 @@ class TradeLogger:
                 action      TEXT,
                 session_id  INTEGER REFERENCES sessions(id)
             );
+
+            CREATE TABLE IF NOT EXISTS learning_features (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                ticket         INTEGER UNIQUE,
+                logged_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                symbol         TEXT,
+                direction      TEXT,
+                -- Multi-timeframe features at entry
+                htf_trend      TEXT,
+                h1_trend       TEXT,
+                m15_trend      TEXT,
+                m1_direction   TEXT,
+                -- Indicator values at entry
+                rsi            REAL,
+                macd_signal    TEXT,
+                bb_position    TEXT,
+                atr            REAL,
+                spread         REAL,
+                volume_ratio   REAL,
+                -- Scoring
+                base_score     INTEGER,
+                session_hour   INTEGER,
+                -- AI layer outputs at entry
+                ml_score       REAL,
+                rl_vote        TEXT,
+                ai_confidence  REAL,
+                ai_decision    TEXT,
+                -- Outcome (filled when trade closes)
+                outcome        INTEGER,   -- 1=WIN, 0=LOSS, NULL=open
+                rr_achieved    REAL,
+                hold_minutes   REAL,
+                FOREIGN KEY(ticket) REFERENCES trades(ticket)
+            );
         """)
         self.conn.commit()
 
@@ -209,6 +242,111 @@ class TradeLogger:
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"log_signal failed: {e}")
+
+    # ── Learning Features ──────────────────────────────────────────────────────
+
+    def log_learning_features(self, ticket: int, features: Dict[str, Any]) -> None:
+        """
+        Store ML features at the moment a trade is opened.
+        Called immediately after log_trade_open so the AI has a training row.
+        """
+        try:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO learning_features
+                  (ticket, symbol, direction,
+                   htf_trend, h1_trend, m15_trend, m1_direction,
+                   rsi, macd_signal, bb_position, atr, spread, volume_ratio,
+                   base_score, session_hour,
+                   ml_score, rl_vote, ai_confidence, ai_decision)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    ticket,
+                    features.get("symbol"),
+                    features.get("direction"),
+                    features.get("htf_trend"),
+                    features.get("h1_trend"),
+                    features.get("m15_trend"),
+                    features.get("m1_direction"),
+                    features.get("rsi"),
+                    features.get("macd_signal"),
+                    features.get("bb_position"),
+                    features.get("atr"),
+                    features.get("spread"),
+                    features.get("volume_ratio"),
+                    features.get("base_score"),
+                    features.get("session_hour"),
+                    features.get("ml_score"),
+                    features.get("rl_vote"),
+                    features.get("ai_confidence"),
+                    features.get("ai_decision"),
+                ),
+            )
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("log_learning_features failed: %s", e)
+
+    def update_learning_outcome(
+        self,
+        ticket:       int,
+        profit:       float,
+        entry_price:  float,
+        exit_price:   float,
+        open_time_dt: Optional[Any] = None,
+        close_time_dt: Optional[Any] = None,
+    ) -> None:
+        """
+        Fill in outcome columns when a position closes.
+        win=1/loss=0, realised RR, and hold duration in minutes.
+        """
+        try:
+            outcome = 1 if profit > 0 else 0
+
+            # Approximate realised RR from stored initial SL
+            cur = self.conn.execute(
+                "SELECT stop_loss FROM trades WHERE ticket=?", (ticket,)
+            )
+            row = cur.fetchone()
+            rr_achieved: Optional[float] = None
+            if row and row["stop_loss"] is not None and row["stop_loss"] != entry_price:
+                risk = abs(entry_price - row["stop_loss"])
+                if risk > 0:
+                    rr_achieved = round(abs(exit_price - entry_price) / risk, 3)
+
+            hold_minutes: Optional[float] = None
+            if open_time_dt and close_time_dt:
+                try:
+                    delta = close_time_dt - open_time_dt
+                    hold_minutes = round(delta.total_seconds() / 60.0, 1)
+                except Exception:
+                    pass
+
+            self.conn.execute(
+                """
+                UPDATE learning_features
+                SET outcome=?, rr_achieved=?, hold_minutes=?
+                WHERE ticket=?
+                """,
+                (outcome, rr_achieved, hold_minutes, ticket),
+            )
+            self.conn.commit()
+        except sqlite3.Error as e:
+            logger.error("update_learning_outcome failed: %s", e)
+
+    def get_closed_trade_count(self) -> int:
+        """Return count of fully closed trades (used by AI retraining scheduler)."""
+        cur = self.conn.execute(
+            "SELECT COUNT(*) FROM trades WHERE close_time IS NOT NULL AND profit IS NOT NULL"
+        )
+        return int((cur.fetchone() or [0])[0])
+
+    def get_open_tickets_without_close(self) -> List[int]:
+        """Return ticket IDs of trades that are open in the DB (no close_time yet)."""
+        cur = self.conn.execute(
+            "SELECT ticket FROM trades WHERE close_time IS NULL"
+        )
+        return [row[0] for row in cur.fetchall()]
 
     # ── Analytics ──────────────────────────────────────────────────────────────
 

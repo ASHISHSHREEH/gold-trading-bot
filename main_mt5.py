@@ -38,6 +38,7 @@ from indicators.moving_average    import MovingAverageCalculator
 from trading.mt5_executor         import MT5Executor
 from trading.mt5_position_manager import MT5PositionManager
 from database.trade_logger        import TradeLogger
+from learning.learning_engine     import LearningEngine
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
@@ -72,8 +73,12 @@ _SYMBOL_LABELS = {
 
 # ── Per-position management state ──────────────────────────────────────────────
 # ticket → {symbol, direction, entry_price, initial_sl, atr,
-#           partial_done, breakeven_done, trail_sl}
+#           partial_done, breakeven_done, trail_sl,
+#           market_snapshot (for RL update on close)}
 _pos_state: Dict[int, Dict[str, Any]] = {}
+
+# ── AI Learning Engine (singleton, initialised in main()) ──────────────────────
+_ai_engine: Optional[LearningEngine] = None
 
 
 # ── Session filter (Upgrade 3) ─────────────────────────────────────────────────
@@ -609,6 +614,20 @@ def display_execution(symbol: str, execution: Dict):
     )
 
 
+def display_ai_decision(decision) -> None:
+    """Print AI layer voting summary beneath signal analysis."""
+    if decision is None:
+        return
+    d = decision.to_dict() if hasattr(decision, "to_dict") else decision
+    ml_str   = f"{d['ml_score']:.2f}" if d.get("ml_active") else "N/A"
+    veto_str = f"  ⚑ VETO: {d['veto_reason']}" if d.get("veto_reason") else ""
+    print(
+        f"  AI  │ score={d['base_score']:.1f}  ml={ml_str}"
+        f"  rl={d['rl_vote']}  conf={d['ai_confidence']:.1f}/10"
+        f"  → {d['decision']}{veto_str}"
+    )
+
+
 def display_stats(stats: Dict):
     if not stats or not stats.get("total_trades"):
         return
@@ -629,6 +648,7 @@ def scan_symbol(
     executor:  MT5Executor,
     pos_mgr:   MT5PositionManager,
     logger_db: TradeLogger,
+    session:   Optional[str] = None,
 ) -> None:
     htf     = analyse_htf(fetcher, symbol)
     trend   = analyse_trend(fetcher, symbol)
@@ -654,6 +674,20 @@ def scan_symbol(
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="NEUTRAL")
         return
 
+    # ── AI layer vote ──────────────────────────────────────────────────────────
+    ai_decision = None
+    if _ai_engine is not None:
+        try:
+            ai_decision = _ai_engine.ai_vote(
+                signal_data, entry, htf, trend, confirm, timing, session
+            )
+            display_ai_decision(ai_decision)
+            if ai_decision.decision == "NEUTRAL":
+                logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="AI_VETO")
+                return
+        except Exception as exc:
+            logger.error("[%s] AI vote error — proceeding without AI: %s", symbol, exc)
+
     execution = executor.execute_signal(
         signal    = signal_data["signal"],
         atr_value = entry["atr"],
@@ -664,16 +698,49 @@ def scan_symbol(
         display_execution(symbol, execution)
         logger_db.log_trade_open(execution)
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="EXECUTED")
-        # Register in position state for partial TP / trailing management
+
+        # ── Store ML features for future training ──────────────────────────────
+        from datetime import datetime, timezone
+        ml_features = {
+            "symbol":       symbol,
+            "direction":    execution["direction"],
+            "htf_trend":    htf.get("trend"),
+            "h1_trend":     trend.get("trend"),
+            "m15_trend":    confirm.get("ma_trend"),
+            "m1_direction": timing.get("direction"),
+            "rsi":          entry.get("rsi"),
+            "macd_signal":  confirm.get("macd"),
+            "bb_position":  (entry.get("bb") or {}).get("position"),
+            "atr":          entry.get("atr"),
+            "spread":       entry.get("spread"),
+            "volume_ratio": entry.get("volume_ratio"),
+            "base_score":   signal_data.get("score", 0),
+            "session_hour": datetime.now(timezone.utc).hour,
+            "ml_score":     ai_decision.ml_score   if ai_decision else None,
+            "rl_vote":      ai_decision.rl_vote     if ai_decision else None,
+            "ai_confidence": ai_decision.ai_confidence if ai_decision else None,
+            "ai_decision":  ai_decision.decision    if ai_decision else None,
+        }
+        logger_db.log_learning_features(execution["ticket"], ml_features)
+
+        # ── Register position state (includes market snapshot for RL) ──────────
+        market_snapshot = {
+            "h1_trend": trend.get("trend", "NEUTRAL"),
+            "h4_trend": htf.get("trend", "NEUTRAL"),
+            "rsi":      entry.get("rsi"),
+            "atr":      entry.get("atr"),
+            "session":  session,
+        }
         _pos_state[execution["ticket"]] = {
-            "symbol":         symbol,
-            "direction":      execution["direction"],
-            "entry_price":    execution["entry_price"],
-            "initial_sl":     execution["stop_loss"],
-            "atr":            execution["atr"],
-            "partial_done":   False,
-            "breakeven_done": False,
-            "trail_sl":       execution["stop_loss"],
+            "symbol":          symbol,
+            "direction":       execution["direction"],
+            "entry_price":     execution["entry_price"],
+            "initial_sl":      execution["stop_loss"],
+            "atr":             execution["atr"],
+            "partial_done":    False,
+            "breakeven_done":  False,
+            "trail_sl":        execution["stop_loss"],
+            "market_snapshot": market_snapshot,
         }
     else:
         print(f"  [{symbol}] Order failed — check logs.")
@@ -682,13 +749,83 @@ def scan_symbol(
 
 # ── Full scan cycle ────────────────────────────────────────────────────────────
 
-def run_scan(
-    fetcher:   MT5DataFetcher,
-    executor:  MT5Executor,
-    pos_mgr:   MT5PositionManager,
-    logger_db: TradeLogger,
-    scan:      int,
+def _detect_and_notify_closed_positions(
+    current_tickets: set,
+    fetcher:         MT5DataFetcher,
+    pos_mgr:         MT5PositionManager,
+    logger_db:       TradeLogger,
+    scan_epoch:      float,
 ) -> None:
+    """
+    Compare tracked _pos_state tickets against live MT5 positions.
+    Tickets that vanished from MT5 have closed — retrieve their deal
+    from MT5 history and notify the AI engine + TradeLogger.
+    """
+    closed_tickets = [t for t in list(_pos_state) if t not in current_tickets]
+    if not closed_tickets:
+        return
+
+    # Query MT5 deal history for the last 10 minutes to catch recent closes
+    deals = pos_mgr.get_recently_closed_deals(since_epoch=scan_epoch - 600)
+    deal_map = {d["ticket"]: d for d in deals}
+
+    for ticket in closed_tickets:
+        state = _pos_state.get(ticket, {})
+        deal  = deal_map.get(ticket)
+
+        profit     = float(deal["profit"])      if deal else 0.0
+        exit_price = float(deal["exit_price"])  if deal else state.get("entry_price", 0.0)
+        close_ts   = float(deal["close_time_epoch"]) if deal else scan_epoch
+
+        logger.info(
+            "[AI] Position closed: ticket=%d %s %s profit=%.2f",
+            ticket, state.get("symbol"), state.get("direction"), profit,
+        )
+
+        # Update TradeLogger close record
+        logger_db.log_trade_close(ticket, exit_price, profit, reason="detected")
+
+        # Update learning outcome (WIN/LOSS + realised RR)
+        logger_db.update_learning_outcome(
+            ticket       = ticket,
+            profit       = profit,
+            entry_price  = float(state.get("entry_price", 0)),
+            exit_price   = exit_price,
+        )
+
+        # Notify AI engine for RL online update
+        if _ai_engine is not None:
+            trade_result = {
+                "ticket":           ticket,
+                "profit":           profit,
+                "rr_achieved":      0.0,    # approximated inside update_learning_outcome
+                "direction":        state.get("direction", ""),
+                "h1_trend":         (state.get("market_snapshot") or {}).get("h1_trend", ""),
+                "close_time_epoch": close_ts,
+            }
+            current_market = {
+                "h1_trend": "NEUTRAL",   # best available without a live fetch here
+                "rsi":      None,
+                "atr":      state.get("atr"),
+                "session":  current_session(),
+            }
+            _ai_engine.on_trade_close(
+                trade_result   = trade_result,
+                entry_market   = state.get("market_snapshot"),
+                current_market = current_market,
+            )
+
+
+def run_scan(
+    fetcher:    MT5DataFetcher,
+    executor:   MT5Executor,
+    pos_mgr:    MT5PositionManager,
+    logger_db:  TradeLogger,
+    scan:       int,
+) -> None:
+    import time as _time
+    scan_epoch = _time.time()
+
     session = current_session()
     display_header(scan, session)
 
@@ -702,6 +839,12 @@ def run_scan(
     if positions:
         manage_open_positions(positions, fetcher, executor)
 
+    # Detect positions that closed since last scan → notify AI + update DB
+    current_tickets = {p["ticket"] for p in positions}
+    _detect_and_notify_closed_positions(
+        current_tickets, fetcher, pos_mgr, logger_db, scan_epoch
+    )
+
     # Session gate (Upgrade 3) — no new entries outside active sessions
     if not session:
         _line()
@@ -711,7 +854,7 @@ def run_scan(
 
     for symbol in config.SYMBOLS:
         try:
-            scan_symbol(symbol, fetcher, executor, pos_mgr, logger_db)
+            scan_symbol(symbol, fetcher, executor, pos_mgr, logger_db, session=session)
         except Exception as exc:
             logger.error(f"[{symbol}] Error during scan: {exc}")
             traceback.print_exc()
@@ -765,6 +908,23 @@ def main():
     pos_mgr   = MT5PositionManager(fetcher)
     logger_db = TradeLogger("data/trading_mt5.db")
 
+    # ── AI Learning Engine ─────────────────────────────────────────────────────
+    global _ai_engine
+    _ai_engine = LearningEngine(db_path="data/trading_mt5.db")
+    _ai_engine.load_models()
+    # Apply any previously learned parameter improvements
+    live_params = _ai_engine.get_live_params()
+    if live_params.get("rsi_bull_min"):
+        config.RSI_BULL_MIN = int(live_params["rsi_bull_min"])
+        config.RSI_BULL_MAX = int(live_params["rsi_bull_max"])
+        config.RSI_BEAR_MIN = int(live_params["rsi_bear_min"])
+        config.RSI_BEAR_MAX = int(live_params["rsi_bear_max"])
+        logger.info(
+            "AI params loaded: bull RSI[%d–%d]  bear RSI[%d–%d]",
+            config.RSI_BULL_MIN, config.RSI_BULL_MAX,
+            config.RSI_BEAR_MIN, config.RSI_BEAR_MAX,
+        )
+
     acct = fetcher.get_account_info()
     if not acct:
         logger.critical("Cannot read account info.")
@@ -810,6 +970,10 @@ def main():
         runtime = timedelta(seconds=int(time.time() - start_time))
         final   = fetcher.get_account_info() or {}
         stats   = logger_db.get_statistics()
+
+        if _ai_engine is not None:
+            _ai_engine.on_session_end()
+            _ai_engine.shutdown()
 
         logger_db.end_session(final.get("balance", 0))
         logger_db.close()

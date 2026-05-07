@@ -1,0 +1,21 @@
+{
+  "params": {
+    "rsi_bull_min": 40.0,
+    "rsi_bull_max": 55.0,
+    "rsi_bear_min": 45.0,
+    "rsi_bear_max": 60.0,
+    "min_score": 2.0,
+    "atr_sl_mult": 1.5,
+    "atr_tp_mult": 3.0,
+    "volume_min_ratio": 0.8,
+    "session_weights": {
+      "Tokyo": 1.0,
+      "London": 1.0,
+      "NewYork": 1.0
+    }
+  },
+  "sample_count": 0,
+  "confidence": {},
+  "last_updated": "bootstrap",
+  "version": 0
+}
