@@ -1,766 +1,517 @@
-# 🤖 Gold Trading Bot - Professional Paper Trading System
+# Gold Trading Bot — MT5 AI Edition
 
-AI-powered multi-timeframe gold (XAU/JPY) trading bot with advanced technical analysis, automated risk management, and paper trading infrastructure.
-
----
-
-## 🎯 Project Status
-
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **Phase 1** | ✅ COMPLETE | SQLite database with portfolio tracking |
-| **Phase 2** | ✅ COMPLETE | Position Manager with auto SL/TP execution |
-| **Phase 3** | ✅ COMPLETE | Full integration with main trading bot |
-| **Phase 4** | 🔄 IN PROGRESS | 2-week data collection period |
-| **Phase 5** | 📅 PLANNED | Analytics dashboard & backtesting engine |
-| **Phase 6** | 🚀 FUTURE | Advanced features (Web UI, Live trading, ML) |
+**Production-grade algorithmic trading system for Gold (XAUUSD) and major indices.**
+Built on MetaTrader5 with a five-timeframe signal engine, institutional risk management,
+and a self-learning AI layer that improves with every trade.
 
 ---
 
-## 📈 VISUAL TIMELINE
+## Project Status
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| MT5 Integration | COMPLETE | Live execution via MetaTrader5 Python API |
+| Five-Timeframe Engine | COMPLETE | H4 → H1 → M15 → M5 → M1 signal cascade |
+| Risk Management | COMPLETE | ATR stops, partial TP, trailing, circuit-breakers |
+| Backtest Engine | COMPLETE | Exact replication of live strategy on historical data |
+| AI Parameter Tuner | COMPLETE | Statistical RSI/ATR/session optimisation |
+| AI ML Classifier | COMPLETE | RandomForest win-probability filter |
+| AI RL Agent | COMPLETE | Q-learning adaptive direction voter |
+| Data Collection | ACTIVE | FxPro Demo4, relaxed filters to accumulate trade history |
+| Live Deployment | PLANNED | After 200+ demo trades validate edge |
+
+---
+
+## What This Bot Does
+
+Every 60 seconds the bot:
+
+1. Reads live price data from your MT5 terminal across five timeframes
+2. Runs a multi-timeframe confluence analysis to find high-probability setups
+3. Asks the AI layer to vote on whether to take the trade
+4. If approved, places a market order with ATR-based stops sized to 1% account risk
+5. Manages open positions automatically: partial close at 1R, breakeven, trailing stop
+6. Records every decision (including rejected signals) to SQLite for future learning
+7. After the position closes, feeds the outcome back into the AI to improve future votes
+
+---
+
+## Architecture Overview
 
 ```
-    Jan 10-11           Jan 12-13           Jan 14-15           Jan 16-24            Feb+
-        │                   │                   │                   │                  │
-        ▼                   ▼                   ▼                   ▼                  ▼
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│   PHASE 1    │    │   PHASE 2    │    │   PHASE 3    │    │   PHASE 4    │    │   PHASE 5    │
-│   Database   │───▶│   Trading    │───▶│    Full      │───▶│    Data      │───▶│  Analytics   │
-│    Setup     │    │    Logic     │    │ Integration  │    │  Collection  │    │  Dashboard   │
-│     ✅       │    │     ✅       │    │     ✅       │    │     🔄       │    │     📅       │
-└──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
-```
-
-### Phase Details
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ✅ PHASE 1: DATABASE & INFRASTRUCTURE (Jan 10-11)                          │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • SQLite database (data/trading.db)                                         │
-│ • Portfolio table - balance, equity, P&L tracking                           │
-│ • Positions table - open trades with real-time updates                      │
-│ • Trades table - permanent closed trade history                             │
-│ • Performance table - daily statistics                                      │
-│ • Starting capital: ¥1,000,000                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ✅ PHASE 2: POSITION & TRADE MANAGEMENT (Jan 12-13)                        │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • PositionManager - Auto-close on Stop Loss hit                             │
-│ • PositionManager - Auto-close on Take Profit hit                           │
-│ • TradeExecutor - Opens positions with risk calculation                     │
-│ • RiskManager - 2% risk per trade, max 3 positions                          │
-│ • Volatility-based stop loss (1.5× multiplier)                              │
-│ • Take profit with minimum 2:1 R:R ratio                                    │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ✅ PHASE 3: FULL INTEGRATION (Jan 14-15)                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • main_integrated.py - Central control loop                                 │
-│ • Multi-timeframe analysis (1h trend + 1m entry)                            │
-│ • Anti-repainting protection (iloc[-2] for completed candles)               │
-│ • Confluence logic (2+ indicators must agree)                               │
-│ • 5-minute scan interval (~299 seconds)                                     │
-│ • Real-time portfolio display with emojis                                   │
-│ • Comprehensive logging system                                              │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 🔄 PHASE 4: DATA COLLECTION (Jan 16 - Jan 24) ◀── YOU ARE HERE             │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • Bot running continuously (5-minute scans)                                 │
-│ • Observing market behavior and signal frequency                            │
-│ • Collecting data for analytics                                             │
-│ • Waiting for favorable trading conditions                                  │
-│ • Target: 2 weeks of observation data                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 📅 PHASE 5: ANALYTICS & REPORTING (Planned: Late Jan / Early Feb 2026)     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • Win rate calculation                                                      │
-│ • Profit factor & Sharpe ratio                                              │
-│ • Maximum drawdown tracking                                                 │
-│ • Equity curve visualization                                                │
-│ • Signal quality analysis                                                   │
-│ • Time-of-day performance                                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ 🚀 PHASE 6: ADVANCED FEATURES (Future)                                     │
-├─────────────────────────────────────────────────────────────────────────────┤
-│ • Web-based dashboard interface                                             │
-│ • Live trading mode (OANDA integration)                                     │
-│ • Real-time notifications (Email/Telegram)                                  │
-│ • Multiple asset support (EUR/USD, BTC, etc.)                               │
-│ • Machine learning signal enhancement                                       │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         main_mt5.py                                  │
+│              Main scan loop · Session filter · Display               │
+└────────────┬────────────────────────────┬────────────────────────────┘
+             │                            │
+    ┌────────▼────────┐        ┌──────────▼──────────┐
+    │  Signal Engine  │        │   Position Manager   │
+    │  (5 timeframes) │        │  Partial TP · Trail  │
+    └────────┬────────┘        └──────────┬───────────┘
+             │                            │
+    ┌────────▼────────────────────────────▼───────────┐
+    │                  AI Learning Layer               │
+    │  ┌─────────────┐ ┌──────────────┐ ┌──────────┐  │
+    │  │ ParamTuner  │ │  ML Classif. │ │ RL Agent │  │
+    │  │ RSI/ATR/Vol │ │ RandomForest │ │Q-learning│  │
+    │  └──────┬──────┘ └──────┬───────┘ └────┬─────┘  │
+    │         └───────────────▼───────────────┘        │
+    │              LearningEngine (orchestrator)        │
+    └──────────────────────┬──────────────────────────-┘
+                           │
+    ┌──────────────────────▼──────────────────────────┐
+    │              SQLite Database                     │
+    │  trades · signals · sessions · learning_features │
+    └──────────────────────┬──────────────────────────┘
+                           │
+    ┌──────────────────────▼──────────────────────────┐
+    │           MetaTrader5 Terminal                   │
+    │     Live prices · Order execution · History      │
+    └─────────────────────────────────────────────────┘
 ```
 
 ---
 
-## ✨ Features Overview
-
-### ✅ Multi-Timeframe Trading System
-- **1-Hour Trend Filter** - Uses completed candles (anti-repainting protection)
-- **1-Minute Entry Signals** - Tactical entry timing with precision
-- **Confluence Logic** - Requires 2+ indicators to agree before trading
-- **Continuous Execution** - Scans market every ~5 minutes automatically
-
-### ✅ Technical Indicators Suite
-
-| Indicator | Purpose | Configuration |
-|-----------|---------|---------------|
-| **RSI** | Momentum extremes | Period: 14, Overbought: >70, Oversold: <30 |
-| **MACD** | Trend & momentum | Fast: 12, Slow: 26, Signal: 9 |
-| **Bollinger Bands** | Volatility analysis | Period: 20, StdDev: 2.0 |
-| **Moving Averages** | Trend direction | Fast: 50, Slow: 200 (Golden/Death Cross) |
-
-### ✅ Paper Trading Infrastructure
-
-**SQLite Database** - Complete trading data persistence
-- 📊 Portfolio snapshots (balance, equity, unrealized P&L)
-- 📈 Open positions with real-time tracking
-- 📉 Closed trades history (permanent records)
-- 📅 Daily performance metrics
-
-**Position Manager** - Automated trade execution
-- ✅ Automatic stop loss execution
-- ✅ Automatic take profit execution
-- ✅ Real-time portfolio updates
-- ✅ Risk limit enforcement (max 3 positions, 5% daily loss)
-- ✅ Manual & emergency close functions
-
-### ✅ Risk Management System
-- **Dynamic Position Sizing** - 2% account risk per trade
-- **Volatility-Based Stops** - Adaptive to market conditions
-- **R:R Validation** - Minimum 2:1 reward-to-risk ratio
-- **Daily Loss Limits** - 5% maximum drawdown protection
-- **Position Limits** - Maximum 3 concurrent trades
-- **Drawdown Protection** - Automatically stops trading if limits breached
-
-### ✅ Data Pipeline
-- **yfinance** - Free historical OHLCV data (no API key required)
-- **MetalPriceAPI** - Real-time spot gold prices (optional)
-- **Hybrid Approach** - Optimal data quality from multiple sources
-
-### ✅ Production Features
-- **Anti-Repainting Protection** - Uses completed candles for trend analysis
-- **Comprehensive Logging** - File (bot.log) + console logging
-- **Error Handling** - Graceful failure recovery, zero-downtime design
-- **Trade Logging** - All signals saved to CSV for analysis
-- **Cross-Platform** - Windows, Mac, Linux compatible
-
----
-
-## 🚀 Quick Start
-
-### Prerequisites
-- Python 3.11 or higher
-- Git
-
-### Installation
-
-```bash
-# Clone repository
-git clone https://github.com/ASHISHSHREEH/gold-trading-bot.git
-cd gold-trading-bot
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Configuration
-
-```bash
-# Optional: Create .env for MetalPriceAPI
-cp .env.example .env
-notepad .env  # Add: METALPRICE_API_KEY=your_key_here
-```
-
-### Running the Bot
-
-```bash
-# Test mode (single scan)
-python test_bot.py
-
-# Production mode (continuous scanning)
-python main_integrated.py
-```
-
-Press `Ctrl+C` to stop.
-
-### Testing Components
-
-```bash
-# Test database operations
-python -m database.schema
-
-# Test position manager
-python -m trading.position_manager
-
-# Test trade executor
-python -m trading.trade_executor
-```
-
----
-
-## 📊 How It Works
-
-### Multi-Timeframe Strategy Flow
-
-```
-┌─────────────────────────────────────────────────────────┐
-│ 1. 1-HOUR TIMEFRAME (Trend Filter)                     │
-│    └─> Uses COMPLETED candle (anti-repainting)         │
-│    └─> Calculates 50 & 200 period MAs                  │
-│    └─> Determines trend: STRONG_BULL/BULL/NEUTRAL      │
-│    └─> Detects Golden/Death Cross signals              │
-└─────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────┐
-│ 2. 1-MINUTE TIMEFRAME (Entry Signal)                   │
-│    └─> RSI: Oversold (<30) or Overbought (>70)        │
-│    └─> MACD: Bullish or Bearish momentum              │
-│    └─> Bollinger Bands: Price at extremes             │
-└─────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────┐
-│ 3. CONFLUENCE LOGIC                                     │
-│    ✅ BUY:  1h bullish + 2+ bullish 1m signals         │
-│    ✅ SELL: 1h bearish + 2+ bearish 1m signals         │
-│    ⚪ NEUTRAL: Conflicting signals → WAIT              │
-└─────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────┐
-│ 4. RISK MANAGEMENT                                      │
-│    └─> Calculate position size (2% risk)               │
-│    └─> Set stop loss (volatility-based)                │
-│    └─> Set take profit (minimum 2:1 R:R)               │
-│    └─> Validate trade meets all requirements           │
-└─────────────────────────────────────────────────────────┘
-                           ↓
-┌─────────────────────────────────────────────────────────┐
-│ 5. POSITION MONITORING (Paper Trading)                 │
-│    └─> Update prices every scan cycle (~5 min)         │
-│    └─> Check stop loss → Auto close if hit             │
-│    └─> Check take profit → Auto close if hit           │
-│    └─> Update portfolio P&L continuously               │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Main Loop Flow (Every ~5 Minutes)
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  STEP A: FETCH MARKET DATA                                  │
-│  • 1-hour data (1 month history) → For trend analysis       │
-│  • 1-minute data (5 days history) → For entry signals       │
-│  • Source: yfinance API (free!)                             │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP B: UPDATE OPEN POSITIONS                              │
-│  • Check each position's current price                      │
-│  • Calculate unrealized P&L                                 │
-│  • Auto-close if Stop Loss hit 🛑                          │
-│  • Auto-close if Take Profit hit 🎯                        │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP C: DISPLAY PORTFOLIO STATUS                           │
-│  • Balance: ¥1,000,000                                      │
-│  • Equity: Balance + Unrealized P&L                         │
-│  • Open Positions: 0/3 maximum                              │
-│  • Recent Closed Trades                                     │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP D: ANALYZE 1-HOUR TREND (Primary Filter)              │
-│  • Use COMPLETED candle only (iloc[-2]) ← Anti-repainting!  │
-│  • Calculate MA Fast (50 period)                            │
-│  • Calculate MA Slow (200 period)                           │
-│  • Determine: BULLISH / BEARISH / NEUTRAL                   │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP E: ANALYZE 1-MINUTE ENTRY SIGNALS                     │
-│  • RSI (14) → BUY if <30, SELL if >70, else NEUTRAL        │
-│  • MACD → BUY/SELL based on line crossover                 │
-│  • Bollinger Bands → Position relative to bands            │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP F: CONFLUENCE LOGIC (Decision Making)                 │
-│                                                             │
-│  IF 1h trend == NEUTRAL:                                    │
-│      → FINAL = NEUTRAL (Don't trade choppy markets!)       │
-│                                                             │
-│  IF 1h trend == BULLISH:                                    │
-│      IF 2+ indicators show BUY:                            │
-│          → FINAL = BUY (HIGH confidence)                   │
-│                                                             │
-│  IF 1h trend == BEARISH:                                    │
-│      IF 2+ indicators show SELL:                           │
-│          → FINAL = SELL (HIGH confidence)                  │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP G: RISK CHECK & TRADE EXECUTION                       │
-│                                                             │
-│  IF signal == BUY or SELL:                                  │
-│      ✓ Check: Open positions < 3?                          │
-│      ✓ Check: Daily loss < 5%?                             │
-│      ✓ Check: Sufficient margin?                           │
-│      ✓ Calculate: Position size (2% risk per trade)        │
-│      ✓ Calculate: Stop Loss (1.5× volatility)              │
-│      ✓ Calculate: Take Profit (3× volatility, min 2:1 R:R) │
-│                                                             │
-│  IF all checks pass:                                        │
-│      → Execute trade via TradeExecutor                     │
-│      → Save to database                                    │
-│      → Log to CSV                                          │
-└─────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────┐
-│  STEP H: SLEEP & REPEAT                                     │
-│  • Sleep ~299 seconds (align to 5-minute intervals)        │
-│  • Go back to Step A                                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 🏗️ Project Structure
+## Complete File Structure
 
 ```
 gold-trading-bot/
+│
+├── main_mt5.py                  ← Entry point — run this
+├── config.py                    ← All tunables + .env loader
+├── requirements.txt             ← pip dependencies
+├── .env.example                 ← Template for MT5 credentials
+│
 ├── data/
-│   ├── fetcher.py              # Hybrid data fetcher (yfinance) ✅
-│   └── trading.db              # SQLite database (auto-created) ✅
-├── database/
-│   └── schema.py               # Database schema & operations ✅
+│   └── mt5_fetcher.py           ← MT5 OHLCV + tick + account data
+│
 ├── indicators/
-│   ├── rsi.py                  # RSI calculator ✅
-│   ├── macd.py                 # MACD calculator ✅
-│   ├── bollinger.py            # Bollinger Bands calculator ✅
-│   └── moving_average.py       # MA with Golden/Death Cross ✅
+│   ├── atr.py                   ← Wilder's ATR (stop sizing)
+│   ├── rsi.py                   ← RSI oscillator
+│   ├── macd.py                  ← MACD histogram + signal
+│   ├── bollinger.py             ← Bollinger Bands position
+│   └── moving_average.py        ← SMA crossover analysis
+│
 ├── trading/
-│   ├── risk_manager.py         # Risk management system ✅
-│   ├── trade_logger.py         # CSV trade logging ✅
-│   ├── position_manager.py     # Auto SL/TP execution ✅
-│   └── trade_executor.py       # Trade execution ✅
-├── logs/
-│   ├── trade_history.csv       # Trade signals (auto-created)
-│   └── bot_integrated.log      # Application logs (auto-created)
-├── main_integrated.py          # Main bot logic (BRAIN) ✅
-├── main.py                     # Legacy main file ✅
-├── test_bot.py                 # Single-scan test ✅
-├── check_data.py               # Database checker ✅
-├── .env                        # API keys (NOT in Git)
-├── .env.example                # Template
-├── requirements.txt            # Dependencies
-└── README.md                   # This file
+│   ├── mt5_executor.py          ← Order placement, retry logic, lot sizing
+│   └── mt5_position_manager.py  ← Risk gates, position queries, deal history
+│
+├── database/
+│   └── trade_logger.py          ← SQLite schema, trade/signal/feature logging
+│
+├── learning/
+│   ├── __init__.py
+│   ├── param_tuner.py           ← Statistical parameter optimiser
+│   ├── signal_classifier.py     ← RandomForest win-probability classifier
+│   ├── rl_agent.py              ← Q-learning RL agent
+│   ├── learning_engine.py       ← Thread-safe orchestrator
+│   ├── learned_params.json      ← Live AI-tuned parameters (auto-updated)
+│   └── models/                  ← Persisted classifier models
+│       └── classifier_v{N}.pkl
+│
+├── backtest/
+│   ├── backtest_engine.py       ← Full strategy replication on historical data
+│   ├── data_loader.py           ← Historical OHLCV loader
+│   └── run_backtest.py          ← CLI runner
+│
+└── logs/
+    └── mt5_bot.log              ← Structured logs
 ```
 
 ---
 
-## 🛡️ Anti-Repainting Protection
+## Signal Engine — Five Timeframes
 
-### The Critical Fix:
+The strategy uses a top-down cascade — each timeframe must agree before the next runs.
 
-```python
-# ❌ WRONG (Repainting Bug):
-current_price = df['close'].iloc[-1]  # Uses forming candle
-# At 10:15 AM → Sees incomplete 10:00-11:00 candle
-# Price spikes → Bot enters trade
-# By 10:59 AM → Candle closes red (repaints!)
-# Result: Trade based on false signal
-
-# ✅ CORRECT (Anti-Repainting):
-current_price = df['close'].iloc[-2]  # Uses completed candle
-# At 10:15 AM → Sees completed 9:00-10:00 candle
-# Result: No repainting possible, reliable signals
+```
+H4  ─── Big-picture direction (MA50 / MA200 crossover)
+        Hard gate: if H4 opposes H1, all trades blocked
+        │
+        ▼
+H1  ─── Major trend direction (MA50 / MA200)
+        STRONG_BULL / BULL / NEUTRAL / BEAR / STRONG_BEAR
+        │
+        ▼
+M15 ─── Trend confirmation (MA20 / MA50 + MACD direction)
+        Must agree with H1  →  +1 score point
+        │
+        ▼
+M5  ─── Entry signals
+        RSI pullback zone  (bull: 40–55 | bear: 45–60)
+        Bollinger Band position
+        Volume gate: current bar ≥ 80% of 20-bar average  [hard gate]
+        │
+        ▼
+M1  ─── Timing confirmation (MACD + RSI midline cross)
+        Momentum must agree with direction  →  +1 score point
 ```
 
-**Why This Matters:** Prevents false signals that would cause ~30-40% of losing trades in production systems.
+**Score system:**
+
+| Score | Confidence | Action |
+|-------|-----------|--------|
+| 4–6 | HIGH | Execute if AI agrees |
+| 2–3 | MODERATE | Execute if AI agrees |
+| 0–1 | LOW | NEUTRAL — no trade |
+
+Minimum score to trade is 2 (configurable via `min_score` in learned params).
 
 ---
 
-## 💾 Database Schema
+## AI Learning Layer
 
-| Table | Purpose | Key Features |
-|-------|---------|--------------|
-| **portfolio** | Account tracking | Historical snapshots, equity calculation |
-| **positions** | Open trades | Real-time P&L, SL/TP levels |
-| **trades** | Trade history | Permanent records, never deleted |
-| **performance** | Daily metrics | Win rate, drawdown, profit factor |
+All three AI components are **advisory only** — they suppress bad trades,
+they never create trades from a NEUTRAL base signal.
 
-### Example Queries
+### 1. Parameter Tuner
+
+Reads closed trade history and finds the parameter values where the bot
+actually makes money — RSI zones, score thresholds, ATR multiples,
+session weights, volume filters.
+
+**Trust blending prevents overfitting:**
+```
+30 trades  →   0% learned  (all defaults, too little data)
+100 trades →  41% learned
+200 trades → 100% learned  (full trust in statistics)
+```
+
+**Hard guard-rails — no parameter can ever leave these bounds:**
+```
+rsi_bull_min: 25–50    rsi_bull_max: 45–70
+rsi_bear_min: 30–55    rsi_bear_max: 50–75
+atr_sl_mult:  1.0–3.0  atr_tp_mult:  2.0–5.0
+volume_ratio: 0.0–1.5  min_score:    1–5
+```
+
+Runs every 5 sessions or after 20 new closed trades. Writes atomic JSON.
+Bot picks up improved parameters on next startup.
+
+---
+
+### 2. ML Signal Classifier
+
+A RandomForest that predicts win probability for each signal
+given the 12 features recorded at trade entry.
+
+**Features:**
+```
+macd_signal    bb_position    htf_trend      h1_trend
+m15_trend      m1_direction   rsi            atr
+spread         volume_ratio   base_score     session_hour
+```
+
+**Regularisation (anti-overfit):**
+- `max_depth = 6` — shallow trees
+- `min_samples_leaf = 5` — each leaf needs real data
+- `class_weight = balanced` — handles unequal win/loss counts
+- Platt scaling for calibrated probabilities
+
+**Lifecycle:**
+- Silent (returns 0.5) until 50 closed trades
+- Retrains every 50 new trades on a background thread
+- PSI drift detection flags when market has changed
+- Keeps last 3 model versions in `learning/models/`
+
+**Veto threshold:** `win_probability < 0.35` when active → trade suppressed
+
+---
+
+### 3. RL Agent
+
+Tabular Q-learning — no GPU, < 1 MB RAM, runs on a Raspberry Pi.
+
+**State space (3 375 states):**
+```
+trend (5) × RSI (5) × volatility (3) × session (5) × prev_outcome (3) × regime (3)
+```
+
+**Reward shaping:**
+```
+WIN:   +rr_achieved (capped at 3.0)
+LOSS:  -1.0
+After 5 consecutive losses: -0.5 × (streak/5) drawdown penalty
+Trend aligned with H1:      +0.2 bonus
+Revenge trade (< 5 min):    -0.3 penalty
+```
+
+Exploration decays: ε = 0.30 → 0.05 over 500 trades.
+Persists to `learning/q_table.pkl` after every session.
+
+---
+
+### 4. Learning Engine (Orchestrator)
+
+**Weighted ensemble:**
+```
+Base rule score  60%  ← strategy always dominates
+ML classifier    25%  ← probabilistic filter
+RL agent         15%  ← adaptive vote
+```
+
+**Composite confidence (0–10):**
+```
+confidence = (0.60 × base_norm + 0.25 × ml_score + 0.15 × rl_align) × 10
+```
+
+**Veto rules:**
+```
+Hard ML veto:  ML active AND win_prob < 0.35     → NEUTRAL
+Joint veto:    RL = HOLD AND ML active AND win_prob < 0.45  → NEUTRAL
+```
+
+**Output on every signal:**
+```
+AI  │ score=4.0  ml=0.71  rl=BUY  conf=7.4/10  → BUY
+AI  │ score=3.0  ml=0.31  rl=HOLD conf=4.1/10  → NEUTRAL  [ML hard veto: win_prob=0.31]
+```
+
+---
+
+## Risk Management
+
+**Per-trade sizing:** 1% of account balance, volatility-scaled lot size
+
+**Stop placement:**
+```
+Stop Loss   = entry ± 1.5 × ATR
+Take Profit = entry ± 3.0 × ATR   (2:1 R:R minimum)
+```
+If broker's minimum stop distance is wider than the ATR-derived stop,
+the stop is widened automatically to comply. Trade is blocked if
+resulting R:R falls below 2.0.
+
+**Partial TP + trailing:**
+```
+At 1R profit    → Close 50%,  move SL to entry (free trade)
+At 1.5R profit  → Trail SL at current_price ∓ 0.5×ATR
+                   Trail only advances, never retreats
+```
+
+**Circuit-breakers (all new entries blocked):**
+```
+Max open positions:  4 total
+Daily drawdown:      3% from session-start balance
+Margin level:        < 200%
+Duplicate symbol:    already have a trade in this symbol
+```
+
+---
+
+## Database Schema
+
+Four tables in `data/trading_mt5.db`:
 
 ```sql
-sqlite3 data/trading.db
+sessions          — per-run summary
+trades            — every executed trade (open + close data)
+signals           — every signal evaluation including NEUTRAL and BLOCKED
+learning_features — ML training corpus: 13 features + outcome per trade
+```
 
--- View open positions
-SELECT * FROM positions WHERE status = 'open';
+`learning_features` is populated at trade open and updated when it closes:
 
--- View recent trades
-SELECT * FROM trades ORDER BY close_time DESC LIMIT 10;
-
--- Check portfolio
-SELECT balance, equity, unrealized_pnl 
-FROM portfolio 
-ORDER BY id DESC 
-LIMIT 1;
-
--- Trading statistics
-SELECT 
-    COUNT(*) as total_trades,
-    AVG(pnl) as avg_pnl,
-    SUM(CASE WHEN pnl > 0 THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as win_rate
-FROM trades;
-
-.quit
+```
+Direction + symbol + all trend states at entry
+RSI, MACD, BB, ATR, spread, volume ratio
+Base score, session hour
+ML score + RL vote + AI confidence at decision time
+Outcome: 1=WIN, 0=LOSS  (filled on close)
+Realised R:R, hold duration in minutes
 ```
 
 ---
 
-## 📈 Example Output
+## Setup
 
-```
-****************************************************************
-* GOLD TRADING BOT - INTEGRATED SYSTEM v1.0                    *
-* Multi-Timeframe | Risk Managed | SQLite                      *
-****************************************************************
-
-🤖 INITIALIZING INTEGRATED TRADING SYSTEM...
-✅ ALL SYSTEMS READY!
-====================================================================
-📡 SCAN #1 | 2026-01-16 09:35:06
-📊 Fetching market data...
-✅ Current Price: ¥4,611.00
-🔄 Updating open positions...
-Updated: 0 | Closed: 0
-💰 PORTFOLIO STATUS
-Balance:     ¥1,000,000.00
-Equity:      ¥1,000,000.00 (+0.00%)
-Unrealized:  +¥0.00
-Realized:    +¥0.00
-Free Margin: ¥1,000,000.00
-📊 OPEN POSITIONS (0/3) ✅
-No open positions
-📈 RECENT CLOSED TRADES (Last 3)
-No trades yet
-──────────────────────────────────────────────────────────────────
-🕐 1-HOUR TREND (CONFIRMED @ 18:00)
-Direction: NEUTRAL
-MA Fast:   ¥4,621.18
-MA Slow:   ¥4,535.85
-⚡ 1-MINUTE ENTRY (LIVE @ 19:25:00)
-Price:  ¥4,611.00
-RSI:    45.96 → NEUTRAL
-MACD:   BUY
-BB:     MIDDLE
-⚪ FINAL SIGNAL: NEUTRAL (LOW)
-Reasons: 1h trend: NEUTRAL
-🛡️ RISK CHECK
-⚪ No actionable signal.
-====================================================================
-💤 Sleeping 298.3s until next scan... (Press Ctrl+C to stop)
-```
-
-### When Trade Executes:
-
-```
-====================================================================
-📡 SCAN #42 | 2026-01-16 14:23:45
-====================================================================
-
-🕐 1-HOUR TREND (CONFIRMED @ 14:00)
-Direction: STRONG_BULL
-MA Fast:   ¥4,650.00
-MA Slow:   ¥4,550.00
-
-⚡ 1-MINUTE ENTRY (LIVE @ 14:23:00)
-Price:  ¥4,625.90
-RSI:    28.50 → BUY
-MACD:   BUY
-BB:     NEAR_LOWER
-
-🟢 FINAL SIGNAL: BUY (HIGH)
-1H Trend: STRONG_BULL (Confirmed)
-1M Entry: 3/3 Indicators Bullish
-
-✅ POSITION OPENED: LONG @ ¥4,625.90
-   Stop Loss:   ¥4,595.23 (-0.66%)
-   Take Profit: ¥4,717.91 (+1.99%)
-   Position:    2.8571 units
-   Risk:        ¥20,000 (2.0% of account)
-   Reward:      ¥60,000 (potential)
-   R:R Ratio:   3.00:1
-====================================================================
-```
-
----
-
-## ⚙️ Configuration
-
-Edit `main_integrated.py` to customize behavior:
-
-```python
-# Account Settings
-ACCOUNT_SIZE = 1_000_000   # Starting balance (¥1M)
-RISK_PER_TRADE = 0.02      # 2% risk per trade
-MAX_DAILY_LOSS = 0.05      # 5% daily loss limit
-SCAN_INTERVAL = 300        # Seconds between scans (~5 min)
-RUN_ONCE = False           # True for testing
-
-# Timeframe Settings
-TIMEFRAMES = {
-    'trend': {
-        'interval': '1h',        # Hourly candles
-        'period': '1mo',         # 1 month history
-        'ma_periods': [50, 200]  # Fast & slow MAs
-    },
-    'entry': {
-        'interval': '1m',        # Minute candles
-        'period': '5d',          # 5 days history
-    }
-}
-```
-
----
-
-## 📚 Technical Deep Dive
-
-### Indicator Calculations
-
-**RSI (Relative Strength Index)**
-```
-RSI = 100 - (100 / (1 + RS))
-RS = Average Gain / Average Loss
-Period: 14, Smoothing: Wilder's method
-```
-
-**MACD (Moving Average Convergence Divergence)**
-```
-MACD Line = 12 EMA - 26 EMA
-Signal Line = 9 EMA of MACD
-Histogram = MACD - Signal
-```
-
-**Bollinger Bands**
-```
-Middle Band = 20-period SMA
-Upper Band = Middle + (2 × StdDev)
-Lower Band = Middle - (2 × StdDev)
-```
-
-**Moving Averages**
-```
-SMA = Sum of last N prices / N
-Golden Cross: 50 MA crosses above 200 MA (Bullish)
-Death Cross: 50 MA crosses below 200 MA (Bearish)
-```
-
-### Position Manager Logic
-
-**Stop Loss Triggers:**
-```
-LONG:  current_price <= stop_loss
-SHORT: current_price >= stop_loss
-```
-
-**Take Profit Triggers:**
-```
-LONG:  current_price >= take_profit
-SHORT: current_price <= take_profit
-```
-
-**Portfolio Updates:**
-```
-Equity = Balance + Unrealized P&L
-Free Margin = Equity - Margin Used
-Drawdown = (Peak Equity - Current Equity) / Peak Equity
-```
-
-### Risk Management Formulas
-
-**Position Sizing (2% Rule):**
-```python
-risk_amount = account_balance × 0.02  # ¥20,000
-stop_distance = abs(entry_price - stop_loss)
-position_size = risk_amount / stop_distance
-```
-
-**Stop Loss Calculation:**
-```python
-volatility = bollinger_bandwidth  # e.g., 0.02 (2%)
-stop_distance = entry_price × volatility × 1.5
-stop_loss = entry_price - stop_distance  # For LONG
-```
-
-**Take Profit Calculation:**
-```python
-risk_distance = abs(entry_price - stop_loss)
-take_profit = entry_price + (risk_distance × 3.0)  # 3:1 R:R
-```
-
----
-
-## ⚠️ Important Warnings
-
-### Risk Disclaimer
-- ⚠️ **Educational purposes ONLY** - Not financial advice
-- ⚠️ **Paper trading mode** - No real money at risk currently
-- ⚠️ **Past performance ≠ Future results**
-- ⚠️ **Test thoroughly** before considering live trading
-- ⚠️ **Only trade with money you can afford to lose**
-
-### Security Best Practices
-- 🔒 Never commit `.env` to Git
-- 🔒 Keep API keys private
-- 🔒 Use strong passwords
-- 🔒 Review code before running
-
----
-
-## 🎯 Development Roadmap
-
-### ✅ Phase 1: Database Infrastructure (COMPLETE)
-- [x] SQLite database with 4 tables
-- [x] Portfolio tracking with historical snapshots
-- [x] Position management system
-- [x] Trade history with permanent records
-- [x] Performance metrics calculation
-
-### ✅ Phase 2: Position Manager (COMPLETE)
-- [x] Real-time position monitoring
-- [x] Automatic stop loss execution
-- [x] Automatic take profit execution
-- [x] Portfolio P&L updates
-- [x] Risk limit enforcement (max 3 positions, 5% daily loss)
-- [x] Manual & emergency close functions
-
-### ✅ Phase 3: Full Integration (COMPLETE)
-- [x] main_integrated.py - Central control loop
-- [x] Multi-timeframe analysis (1h trend + 1m entry)
-- [x] Anti-repainting protection
-- [x] Confluence logic (2+ indicators)
-- [x] Real-time portfolio display
-- [x] Comprehensive logging
-
-### 🔄 Phase 4: Data Collection (IN PROGRESS)
-- [x] Bot running continuously
-- [x] 5-minute scan intervals
-- [ ] 2-week observation period
-- [ ] Signal frequency analysis
-- [ ] Market condition documentation
-
-### 📅 Phase 5: Analytics & Backtesting (PLANNED)
-- [ ] Backtesting engine with historical data
-- [ ] Performance analytics dashboard
-- [ ] Trade statistics (Sharpe ratio, max drawdown, etc.)
-- [ ] Strategy optimization tools
-- [ ] Equity curve visualization
-
-### 🚀 Phase 6: Advanced Features (FUTURE)
-- [ ] Web-based dashboard interface
-- [ ] Live trading mode (OANDA integration)
-- [ ] Real-time notifications (Email/Telegram)
-- [ ] Multiple asset support (EUR/USD, BTC, etc.)
-- [ ] Machine learning signal enhancement
-
----
-
-## 🔧 Development Workflow
+**Requirements:** Windows with MT5 terminal installed, Python 3.11+
 
 ```bash
-# Daily development cycle
-cd gold-trading-bot
-git pull
-
-# Make changes...
-
-# Test changes
-python test_bot.py
-
-# Run continuous mode
-python main_integrated.py
-
-# Commit and push
-git add .
-git commit -m "Descriptive commit message"
-git push
+pip install -r requirements.txt
 ```
 
----
+Copy `.env.example` to `.env`:
 
-## 📊 Viewing Results
+```env
+MT5_LOGIN=12345678
+MT5_PASSWORD=your_password
+MT5_SERVER=FxPro.MT5-Demo4
+MT5_PATH=C:\Program Files\FxPro MT5 Terminal\terminal64.exe
+ACCOUNT_TYPE=DEMO
+MT5_SYMBOLS=GOLD,#USSPX500,#US100_M26,#Japan225
+MT5_MAGIC=20240101
+ACCOUNT_FX_RATE=158.0
+```
 
-### Trade History
+**Run:**
 ```bash
-cd logs
-start trade_history.csv  # Windows
-open trade_history.csv   # Mac
-cat trade_history.csv    # Linux
+python main_mt5.py
 ```
 
-### Application Logs
+**Backtest:**
 ```bash
-tail -f logs/bot_integrated.log  # Live log viewing
-```
-
-### Database Queries
-```bash
-sqlite3 data/trading.db
-> SELECT * FROM portfolio ORDER BY id DESC LIMIT 1;
-> SELECT * FROM positions;
-> SELECT * FROM trades ORDER BY close_time DESC LIMIT 10;
-> .quit
+python backtest/run_backtest.py --symbol GOLD --days 90
+python backtest/run_backtest.py --symbol GOLD --days 90 --jpy
 ```
 
 ---
 
-## 🤝 Contributing
+## Configuration Reference
 
-This is a personal learning project, but suggestions and feedback are welcome! Feel free to:
-- Open issues for bugs or questions
-- Suggest improvements
-- Share your results
+| Parameter | Default | Note |
+|-----------|---------|------|
+| `RISK_PER_TRADE` | 0.01 | 1% of balance per trade |
+| `MAX_DAILY_LOSS` | 0.03 | 3% daily drawdown limit |
+| `MAX_POSITIONS` | 4 | Max simultaneous positions |
+| `MIN_RR_RATIO` | 2.0 | Min R:R to place any order |
+| `ATR_SL_MULT` | 1.5 | SL = entry ± ATR × this |
+| `ATR_TP_MULT` | 3.0 | TP = entry ± ATR × this |
+| `RSI_BULL_MIN/MAX` | 40/55 | RSI zone for BUY pullbacks |
+| `RSI_BEAR_MIN/MAX` | 45/60 | RSI zone for SELL rallies |
+| `VOLUME_MIN_RATIO` | 0.8 | Min M5 volume vs 20-bar avg |
+| `SCAN_INTERVAL` | 60 | Seconds between cycles |
+| `BREAKEVEN_AT_R` | 1.0 | Move SL to entry at this R |
+| `TRAIL_START_AT_R` | 1.5 | Start trailing at this R |
+| `TRAIL_ATR_MULT` | 0.5 | Trail distance = ATR × this |
+| `PARTIAL_TP_RATIO` | 0.5 | Close this fraction at 1R |
+
+*RSI and ATR params are auto-tuned by the AI after 200+ trades.*
 
 ---
 
-## 📞 Contact & Resources
+## Full Development History
 
-- **GitHub:** [@ASHISHSHREEH](https://github.com/ASHISHSHREEH)
-- **Repository:** [gold-trading-bot](https://github.com/ASHISHSHREEH/gold-trading-bot)
-- **Documentation:** See code comments and docstrings
+### Foundation (Jan 10–11, 2026)
+- Project scaffolding, MetalPriceAPI data fetcher
+- RSI + MACD indicators
+- SQLite portfolio database
+- Basic paper trading loop
+
+### Position Management (Jan 12–13, 2026)
+- Auto stop-loss and take-profit
+- Risk manager: 2% per trade, max 3 positions
+- Anti-repainting protection (confirmed closed candles only)
+- Volatility-based stop sizing
+
+### Full Integration (Jan 14–15, 2026)
+- Connected data → signal → execution → logging pipeline
+- Position tracking with real-time P&L
+- 2-week paper trade test run initiated
+
+### MT5 Live Engine (Apr 30, 2026) — PR #1
+Replaced yfinance/MetalPriceAPI with direct MetaTrader5 integration:
+
+- `MT5DataFetcher` — thin wrapper for OHLCV, tick, account data from terminal
+- `MT5Executor` — live order placement:
+  - Risk-based lot sizing (not fixed lots)
+  - Broker minimum stop distance compliance
+  - Exponential back-off retry on requotes/connection errors
+  - R:R gate: orders below 2.0 R:R are blocked
+  - Pre-flight `order_check()` before every send
+- `MT5PositionManager` — three-layer account risk circuit-breaker
+- `ATRCalculator` — Wilder's ATR for all volatility-based stops
+- `TradeLogger` — offline SQLite analytics (MT5 is source of truth for live state)
+
+### Strategy Upgrade (May 2, 2026) — PR #2
+Five-timeframe system replacing two-timeframe:
+
+1. **H4 bias gate** — hard block against big-picture trend
+2. **RSI pullback zones** — trade pullbacks (40–55/45–60) not extremes
+3. **Session filter** — active trading windows, dead-zone position management
+4. **Partial TP + trailing** — 50% at 1R, breakeven, 0.5×ATR trail from 1.5R
+5. **Volume gate** — M5 bar ≥ 80% of 20-bar average
+6. **JPY account** — live USD/JPY FX rate from MT5 for lot sizing
+7. **Backtest engine** — exact live-strategy replication on historical data
+
+### AI Learning Layer (May 7, 2026) — current branch
+Self-learning system using own trade history:
+
+**`learning/param_tuner.py`** (406 lines)
+- Exponential recency weighting, trust blending, bootstrap CI
+- Tunes: RSI zones, ATR multiples, score threshold, volume ratio, session weights
+- Atomic JSON writes, hard guard-rails
+
+**`learning/signal_classifier.py`** (372 lines)
+- 12-feature RandomForest, Platt-calibrated probabilities
+- max_depth=6, min_samples_leaf=5, balanced classes
+- StratifiedKFold CV with ROC-AUC, PSI drift detection
+- Model versioning, background retraining
+
+**`learning/rl_agent.py`** (379 lines)
+- Tabular Q-learning, 3 375 states, < 1 MB RAM
+- Shaped rewards, epsilon decay, persistent Q-table
+
+**`learning/learning_engine.py`** (455 lines)
+- Weighted ensemble (60/25/15), two veto rules
+- Background daemon retrain thread (never blocks scan)
+- Thread-safe throughout
+
+**`database/trade_logger.py`** — extended with `learning_features` table
+**`trading/mt5_position_manager.py`** — `get_recently_closed_deals()` for AI feedback
+**`main_mt5.py`** — AI init, ai_vote() hook, close detection, session end lifecycle
 
 ---
 
-## 📄 License
+## Roadmap
 
-Educational and research purposes only. Not licensed for commercial use. Not financial advice.
+### Phase 7 — Data Collection (now → ~200 trades)
+- [ ] Run continuously on FxPro demo
+- [ ] Verify AI logging is clean (check `learning_features` table)
+- [ ] Confirm classifier activates after trade 50
+- [ ] Monitor `drift_score()` for distribution shift
+- [ ] Run backtest on 90 days of XAUUSD to validate edge exists
+
+### Phase 8 — Optimisation
+- [ ] Session-specific RSI zones (London vs NY behave differently)
+- [ ] Per-symbol classifiers (GOLD vs S&P500 vs Nikkei)
+- [ ] News event filter (suppress trades near high-impact events)
+- [ ] Spread spike detection and dynamic threshold
+- [ ] Market regime classifier (trending / ranging / volatile)
+- [ ] Streamlit performance dashboard (equity curve, AI decision audit log)
+
+### Phase 9 — Live Preparation
+- [ ] Shadow mode: run demo and live in parallel for 30 days
+- [ ] Slippage and commission model in backtest
+- [ ] Kelly criterion position sizing (with cap at 2%)
+- [ ] Multi-broker abstraction layer
+- [ ] Automated alert system (Telegram / email on circuit-breaker trips)
+- [ ] Final validation checklist before removing `assert_demo_mode()`:
+  - 200+ demo trades accumulated
+  - Profit factor > 1.3 over 60+ consecutive days
+  - Max drawdown never hit 5% on demo
+  - AI models retrained at least 3 times
+
+### Research Backlog
+- Transformer signal model on raw OHLCV sequences
+- Multi-asset correlation filter (block GOLD BUY when DXY bullish)
+- Order flow / DOM imbalance gate
+- ONNX model export (deploy without scikit-learn)
 
 ---
 
-**Built with:** Python, SQLite, pandas, yfinance, determination, and countless hours of debugging 💪
+## Safety Notes
 
-**Last Updated:** January 16, 2026  
-**Version:** 2.1 (Paper Trading Edition - Data Collection Phase)
+1. **Demo only.** `assert_demo_mode()` in `config.py` hard-blocks live account trading.
+   Do not remove this until all Phase 9 checks are complete.
+
+2. **AI fails safe.** If sklearn is missing, a model file is corrupted, or any AI
+   component raises an exception, the bot logs a warning and falls back to
+   pure rule-based execution. It never crashes the scan loop.
+
+3. **RL explores randomly early.** At ε=0.30 the RL agent votes randomly ~30%
+   of the time. This is correct — it needs to explore before it can learn.
+   Votes don't affect execution unless combined with an ML soft veto.
+
+4. **Learned parameters apply at next startup.** Changing `learned_params.json`
+   mid-session has no effect. The file is read only in `main()`.
+
+5. **Never raise risk to recover losses.** The 3% daily drawdown circuit-breaker
+   exists to protect capital. When it trips, let it trip.
+
+---
+
+## License
+
+Personal use and research only. Not financial advice.
+Past demo performance does not guarantee live results.
