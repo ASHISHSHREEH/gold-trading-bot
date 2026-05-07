@@ -5,7 +5,7 @@ Risk gates are account-wide, not per-symbol.
 """
 import logging
 from datetime import datetime
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
 try:
     import MetaTrader5 as mt5
