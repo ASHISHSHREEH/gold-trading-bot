@@ -57,12 +57,11 @@ RSI_BEAR_MAX = 65   # REAL MONEY: 60
 #       "London":  (7,  16),
 #       "NewYork": (13, 21),
 #   }
-SESSIONS = {}
+SESSIONS = {"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}
 
 # ── Signal Score Threshold ────────────────────────────────────────────────────
-# DATA COLLECTION: 1 — fires on minimal confluence, maximises trade count
-# REAL MONEY:      3 — requires H4+M15+RSI+BB all agreeing
-MIN_SCORE = 1
+# Default = Phase 3 strict. apply_trading_phase() sets this on every startup.
+MIN_SCORE = 3
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
@@ -81,7 +80,7 @@ PYRAMID_MAX_ADDS  = 1      # max 1 add-on per original position
 # ── Volume Filter ──────────────────────────────────────────────────────────────
 # DATA COLLECTION — 50% still blocks dead bars, but passes most candles
 VOLUME_LOOKBACK  = 20
-VOLUME_MIN_RATIO = 0.0   # REAL MONEY: 0.8  (0.0 = disabled for data collection)
+VOLUME_MIN_RATIO = 0.8   # Phase 3 strict — apply_trading_phase() sets this
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
@@ -131,7 +130,7 @@ _PHASE_SETTINGS = {
 }
 
 # Runtime mutable — updated by apply_trading_phase()
-H4_HARD_GATE = False   # False = soft (data collection), True = hard block
+H4_HARD_GATE = True    # Phase 3 strict — apply_trading_phase() sets this
 
 
 def get_trading_phase(closed_trade_count: int) -> int:
