@@ -37,6 +37,7 @@ from indicators.bollinger         import BollingerBandsCalculator
 from indicators.moving_average    import MovingAverageCalculator
 from trading.mt5_executor         import MT5Executor
 from trading.mt5_position_manager import MT5PositionManager
+from trading.trade_snapshot       import save_trade_snapshot
 from database.trade_logger        import TradeLogger
 from learning.learning_engine     import LearningEngine
 
@@ -754,6 +755,36 @@ def scan_symbol(
             "trail_sl":        execution["stop_loss"],
             "market_snapshot": market_snapshot,
         }
+
+        # ── Trade snapshot image ───────────────────────────────────────────────
+        try:
+            candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
+            snap_df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
+            if not snap_df.empty:
+                bb_df    = _IND["bb"].calculate_bands(snap_df["close"])
+                snap_df  = snap_df.join(bb_df)
+                rsi_vals = _IND["rsi"].calculate_rsi(snap_df).tolist()
+                macd_df  = _IND["macd"].calculate_macd(snap_df)
+                save_trade_snapshot(
+                    symbol      = symbol,
+                    direction   = execution["direction"],
+                    entry_price = execution["entry_price"],
+                    sl          = execution["stop_loss"],
+                    tp          = execution["take_profit"],
+                    signal_data = signal_data,
+                    entry_df    = snap_df,
+                    rsi_values  = rsi_vals,
+                    macd_line   = macd_df["macd"].tolist(),
+                    macd_signal = macd_df["signal"].tolist(),
+                    macd_hist   = macd_df["histogram"].tolist(),
+                    bb_upper    = snap_df["upper"].tolist(),
+                    bb_lower    = snap_df["lower"].tolist(),
+                    bb_mid      = snap_df["middle"].tolist(),
+                    ticket      = execution["ticket"],
+                )
+        except Exception as snap_exc:
+            logger.warning("Snapshot error: %s", snap_exc)
+
     else:
         print(f"  [{symbol}] Order failed — check logs.")
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="FAILED")
