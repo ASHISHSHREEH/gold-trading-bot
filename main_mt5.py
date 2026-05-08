@@ -677,7 +677,26 @@ def scan_symbol(
     display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
-    risk = pos_mgr.check_risk_limits(symbol=symbol)
+    # ── Check pyramid eligibility before normal risk gate ─────────────────────
+    is_pyramid    = False
+    risk_mult     = 1.0
+    pyramid_pos   = None
+
+    if signal_data["signal"] != "NEUTRAL":
+        pyramid_pos = pos_mgr.get_pyramid_eligible(
+            symbol, signal_data["signal"], _pos_state
+        )
+        if pyramid_pos:
+            is_pyramid = True
+            risk_mult  = config.PYRAMID_LOT_RATIO
+            print(
+                f"  PYRAMID  |  Adding to {symbol} {signal_data['signal']}  "
+                f"ticket={pyramid_pos['ticket']}  profit={pyramid_pos['profit']:+.2f}  "
+                f"lot_ratio={risk_mult:.0%}"
+            )
+
+    # Normal risk gate — skipped for duplicate-symbol check on pyramid path
+    risk = pos_mgr.check_risk_limits(symbol=symbol, allow_pyramid=is_pyramid)
     if not risk["can_open_new"]:
         print(f"  GATE: {'; '.join(risk['reasons'])}")
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="BLOCKED")
@@ -702,7 +721,8 @@ def scan_symbol(
             logger.error("[%s] AI vote error — proceeding without AI: %s", symbol, exc)
 
     execution = executor.execute_signal(
-        signal    = signal_data["signal"],
+        signal          = signal_data["signal"],
+        risk_multiplier = risk_mult,
         atr_value = entry["atr"],
         symbol    = symbol,
     )
@@ -754,7 +774,14 @@ def scan_symbol(
             "breakeven_done":  False,
             "trail_sl":        execution["stop_loss"],
             "market_snapshot": market_snapshot,
+            "is_pyramid":      is_pyramid,
+            "pyramid_adds":    0,
         }
+        # Track add-on count on the parent position so we don't pyramid twice
+        if is_pyramid and pyramid_pos:
+            parent = _pos_state.get(pyramid_pos["ticket"])
+            if parent is not None:
+                parent["pyramid_adds"] = parent.get("pyramid_adds", 0) + 1
 
         # ── Trade snapshot image ───────────────────────────────────────────────
         try:

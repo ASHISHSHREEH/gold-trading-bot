@@ -50,6 +50,7 @@ class MT5Executor:
         signal: str,
         atr_value: float,
         symbol: str,
+        risk_multiplier: float = 1.0,
     ) -> Optional[Dict[str, Any]]:
         if mt5 is None:
             return None
@@ -76,6 +77,8 @@ class MT5Executor:
             return None
 
         lots = self._calculate_lots(price, sl, acct["balance"], sym_info, acct.get("currency", "USD"))
+        if risk_multiplier != 1.0:
+            lots = self._round_lots(lots * risk_multiplier, sym_info)
         if lots == 0.0:
             return None
 

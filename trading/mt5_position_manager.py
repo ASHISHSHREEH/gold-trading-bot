@@ -70,12 +70,55 @@ class MT5PositionManager:
         """True if there is already an open position for this symbol."""
         return self.get_position_count(symbol) > 0
 
+    def get_pyramid_eligible(self, symbol: str, signal_direction: str, pos_state: dict) -> Optional[Dict]:
+        """
+        Returns the existing position if it qualifies for a pyramid add-on, else None.
+
+        Conditions:
+          - PYRAMID_ENABLED is True
+          - Existing position in same symbol and same direction
+          - Position is >= PYRAMID_MIN_R in profit (uses ATR stored in pos_state)
+          - Not already pyramided (PYRAMID_MAX_ADDS limit)
+        """
+        if not config.PYRAMID_ENABLED:
+            return None
+
+        positions = self.get_open_positions(symbol)
+        for pos in positions:
+            if pos["direction"] != signal_direction:
+                continue
+
+            ticket = pos["ticket"]
+            state  = pos_state.get(ticket, {})
+
+            # Check add-on count
+            adds_done = state.get("pyramid_adds", 0)
+            if adds_done >= config.PYRAMID_MAX_ADDS:
+                continue
+
+            # Need ATR to measure R
+            atr = state.get("atr")
+            if not atr or atr <= 0:
+                continue
+
+            sl_distance = abs(pos["entry_price"] - pos["sl"]) if pos["sl"] else atr * config.ATR_SL_MULT
+            r_achieved  = pos["profit"] / (sl_distance * pos["volume"] * 100) if sl_distance > 0 else 0
+
+            # Simpler check: price moved enough from entry
+            price_move  = abs(pos["current_price"] - pos["entry_price"])
+            r_in_price  = price_move / (atr * config.ATR_SL_MULT) if atr > 0 else 0
+
+            if r_in_price >= config.PYRAMID_MIN_R:
+                return pos
+
+        return None
+
     # ── Risk Gates ─────────────────────────────────────────────────────────────
 
-    def check_risk_limits(self, symbol: str = None) -> Dict[str, Any]:
+    def check_risk_limits(self, symbol: str = None, allow_pyramid: bool = False) -> Dict[str, Any]:
         """
         Account-wide three-layer risk gate.
-        Also checks symbol-level: won't open a second position in the same symbol.
+        If allow_pyramid=True, skips the duplicate-symbol check (pyramiding path).
 
         Returns:
             { 'can_open_new': bool, 'reasons': list, 'position_count': int, 'account': dict }
@@ -92,8 +135,8 @@ class MT5PositionManager:
             )
             can_trade = False
 
-        # Gate 2 — no duplicate position in the same symbol
-        if symbol and self.has_position_for(symbol):
+        # Gate 2 — no duplicate position in same symbol (skipped on pyramid path)
+        if symbol and not allow_pyramid and self.has_position_for(symbol):
             reasons.append(f"Already have an open position in {symbol}")
             can_trade = False
 

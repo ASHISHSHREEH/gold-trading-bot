@@ -70,6 +70,14 @@ MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MIN_RR_RATIO   = 2.0
 
+# ── Pyramiding (scaling into winning trades) ───────────────────────────────────
+# If an existing trade is already PYRAMID_MIN_R× in profit, the bot adds a
+# second smaller position in the same direction on the same symbol.
+PYRAMID_ENABLED   = True
+PYRAMID_MIN_R     = 1.0    # existing trade must be >= 1R in profit to pyramid
+PYRAMID_LOT_RATIO = 0.5    # pyramid lot = 50% of a normal-sized trade
+PYRAMID_MAX_ADDS  = 1      # max 1 add-on per original position
+
 # ── Volume Filter ──────────────────────────────────────────────────────────────
 # DATA COLLECTION — 50% still blocks dead bars, but passes most candles
 VOLUME_LOOKBACK  = 20
