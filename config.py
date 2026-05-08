@@ -94,6 +94,16 @@ TRAIL_START_AT_R = 1.5
 TRAIL_ATR_MULT   = 0.5
 PARTIAL_TP_RATIO = 0.5
 
+# ── News Filter ────────────────────────────────────────────────────────────────
+# Blocks new entries around scheduled high-impact events (NFP, CPI, etc.)
+# and when ATR spikes abnormally (unscheduled news / surprise data).
+NEWS_FILTER_ENABLED    = True
+NEWS_BUFFER_BEFORE_MIN = 30    # minutes to block BEFORE a known event
+NEWS_BUFFER_AFTER_MIN  = 30    # minutes to block AFTER a known event
+NEWS_ATR_SPIKE_MULT    = 2.0   # block if current ATR > 2× its 20-bar average
+# To add custom blackout windows (e.g. FOMC dates), set in .env:
+#   NEWS_BLACKOUT=FOMC 2026-06-11 19:00, PCE 2026-06-28 13:30
+
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60
 RUN_ONCE      = False

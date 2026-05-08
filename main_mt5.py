@@ -44,6 +44,7 @@ from indicators.swing_levels      import (
     find_swing_low, find_swing_high,
     detect_sl_hunt, detect_breakout_retest,
 )
+from indicators.news_filter       import is_news_blackout, check_atr_spike
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
@@ -818,6 +819,33 @@ def scan_symbol(
     if signal_data["signal"] == "NEUTRAL":
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="NEUTRAL")
         return
+
+    # ── News filter — block new entries around high-impact events ─────────────
+    if config.NEWS_FILTER_ENABLED:
+        # Layer 1: economic calendar blackout
+        blocked, reason = is_news_blackout(
+            buffer_before_min = config.NEWS_BUFFER_BEFORE_MIN,
+            buffer_after_min  = config.NEWS_BUFFER_AFTER_MIN,
+        )
+        if not blocked:
+            # Layer 2: ATR spike guard (catches unscheduled surprises)
+            try:
+                candles_atr = max(config.ENTRY_CANDLES, 30)
+                atr_df      = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles_atr, symbol)
+                if not atr_df.empty:
+                    atr_series  = _IND["atr"].calculate(atr_df)
+                    blocked, reason = check_atr_spike(
+                        current_atr = entry["atr"],
+                        atr_series  = atr_series,
+                        spike_mult  = config.NEWS_ATR_SPIKE_MULT,
+                    )
+            except Exception:
+                pass
+
+        if blocked:
+            print(f"  [{symbol}] {reason}")
+            logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="NEWS_BLOCK")
+            return
 
     # ── AI layer vote ──────────────────────────────────────────────────────────
     ai_decision = None
