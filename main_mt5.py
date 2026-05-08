@@ -280,9 +280,16 @@ def generate_signal(
     reasons   = [f"H4: {htf_dir}", f"H1: {trend_dir}"]
     score     = 0
 
-    # ── H4 gate — DATA COLLECTION mode: soft (lose bonus, don't block) ──────
-    # REAL MONEY: restore hard block (return NEUTRAL when H4 conflicts with H1)
+    # ── H4 gate — auto-switched by apply_trading_phase() ─────────────────────
     if (is_bull and htf_bear) or (is_bear and htf_bull):
+        if config.H4_HARD_GATE:
+            reasons.append(f"BLOCKED: H4 {htf_dir} conflicts with H1 {trend_dir}")
+            return {
+                "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+                "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+                "rsi": rsi, "macd": confirm["macd"],
+                "bb": bb["position"], "volume_ok": entry["volume_ok"],
+            }
         reasons.append(f"H4 {htf_dir} conflicts with H1 {trend_dir} — no H4 bonus")
 
     # ── Volume hard gate ───────────────────────────────────────────────────────
@@ -512,9 +519,16 @@ def display_header(scan: int, session: Optional[str]):
         if session
         else "Session: DEAD ZONE (skipping new entries)"
     )
+    if config.MIN_SCORE == 1:
+        phase_label = "PHASE 1 — Data Collection"
+    elif config.MIN_SCORE == 2:
+        phase_label = "PHASE 2 — Transitional"
+    else:
+        phase_label = "PHASE 3 — Strict"
     print(
         f"  SCAN #{scan}  |  {datetime.now().strftime('%Y-%m-%d  %H:%M:%S')}  |  "
-        f"{sess_label}  |  Symbols: {', '.join(config.SYMBOLS)}"
+        f"{sess_label}  |  {phase_label}  |  Score≥{config.MIN_SCORE}  |  "
+        f"Symbols: {', '.join(config.SYMBOLS)}"
     )
     _line("═")
 
@@ -824,6 +838,10 @@ def run_scan(
     import time as _time
     scan_epoch = _time.time()
 
+    # Re-evaluate trading phase every scan — auto-escalates when trade count crosses threshold
+    trade_count   = logger_db.get_closed_trade_count()
+    current_phase = config.apply_trading_phase(trade_count)
+
     session = current_session()
     display_header(scan, session)
 
@@ -910,7 +928,18 @@ def main():
     global _ai_engine
     _ai_engine = LearningEngine(db_path="data/trading_mt5.db")
     _ai_engine.load_models()
-    # Apply any previously learned parameter improvements
+
+    # Apply trading phase based on how many closed trades we already have
+    trade_count   = logger_db.get_closed_trade_count()
+    current_phase = config.apply_trading_phase(trade_count)
+    logger.info(
+        "Trading phase %d  (closed trades=%d)  "
+        "MIN_SCORE=%d  volume_ratio=%.0f%%  H4_hard_gate=%s",
+        current_phase, trade_count,
+        config.MIN_SCORE, config.VOLUME_MIN_RATIO * 100, config.H4_HARD_GATE,
+    )
+
+    # Apply any previously learned parameter improvements (overrides phase RSI only)
     live_params = _ai_engine.get_live_params()
     if live_params.get("rsi_bull_min"):
         config.RSI_BULL_MIN = int(live_params["rsi_bull_min"])

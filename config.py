@@ -91,6 +91,56 @@ SCAN_INTERVAL = 60
 RUN_ONCE      = False
 
 
+# ── Auto-Escalation Thresholds ────────────────────────────────────────────────
+# Bot automatically tightens rules as trade count grows.
+# Phase 1 (0–199):   data collection — fire on almost anything
+# Phase 2 (200–499): transitional   — require moderate confluence
+# Phase 3 (500+):    strict         — institutional-grade filters
+MODE_PHASE1_TRADES = 200   # trades needed to leave data-collection phase
+MODE_PHASE2_TRADES = 500   # trades needed to enter strict phase
+
+_PHASE_SETTINGS = {
+    # phase: (MIN_SCORE, VOLUME_MIN_RATIO, RSI_BULL_MIN, RSI_BULL_MAX,
+    #          RSI_BEAR_MIN, RSI_BEAR_MAX, h4_hard_gate, sessions_active)
+    1: dict(min_score=1, volume_ratio=0.0, rsi_bull=(35, 60), rsi_bear=(40, 65),
+            h4_hard_gate=False, sessions={}),
+    2: dict(min_score=2, volume_ratio=0.5, rsi_bull=(38, 58), rsi_bear=(42, 62),
+            h4_hard_gate=False, sessions={}),
+    3: dict(min_score=3, volume_ratio=0.8, rsi_bull=(40, 55), rsi_bear=(45, 60),
+            h4_hard_gate=True,
+            sessions={"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}),
+}
+
+# Runtime mutable — updated by apply_trading_phase()
+H4_HARD_GATE = False   # False = soft (data collection), True = hard block
+
+
+def get_trading_phase(closed_trade_count: int) -> int:
+    if closed_trade_count >= MODE_PHASE2_TRADES:
+        return 3
+    if closed_trade_count >= MODE_PHASE1_TRADES:
+        return 2
+    return 1
+
+
+def apply_trading_phase(closed_trade_count: int) -> int:
+    """Apply the correct rule set for the current trade count. Returns phase number."""
+    global MIN_SCORE, VOLUME_MIN_RATIO, RSI_BULL_MIN, RSI_BULL_MAX
+    global RSI_BEAR_MIN, RSI_BEAR_MAX, H4_HARD_GATE, SESSIONS
+
+    phase    = get_trading_phase(closed_trade_count)
+    settings = _PHASE_SETTINGS[phase]
+
+    MIN_SCORE        = settings["min_score"]
+    VOLUME_MIN_RATIO = settings["volume_ratio"]
+    RSI_BULL_MIN, RSI_BULL_MAX = settings["rsi_bull"]
+    RSI_BEAR_MIN, RSI_BEAR_MAX = settings["rsi_bear"]
+    H4_HARD_GATE     = settings["h4_hard_gate"]
+    SESSIONS         = settings["sessions"]
+
+    return phase
+
+
 def assert_demo_mode():
     if ACCOUNT_TYPE.upper() == "LIVE":
         raise RuntimeError(
