@@ -335,16 +335,9 @@ def generate_signal(
 
     signal = "NEUTRAL"
 
-    # DATA COLLECTION: also trade when H1 is NEUTRAL but H4 has clear direction
-    if not (is_bull or is_bear):
-        if htf_bull:
-            is_bull   = True
-            trend_dir = "BULL"
-            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
-        elif htf_bear:
-            is_bear   = True
-            trend_dir = "BEAR"
-            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
+    # H1 must have a clear direction — H4-only fallback removed.
+    # A trade with H1 NEUTRAL has no real trend context; feeding these to ML
+    # trains the model on noise, not structure.
 
     if is_bull or is_bear:
         # H4 actively confirms H1 → bonus point

@@ -118,9 +118,10 @@ MODE_PHASE1_TRADES = 200   # trades needed to leave data-collection phase
 MODE_PHASE2_TRADES = 500   # trades needed to enter strict phase
 
 _PHASE_SETTINGS = {
-    # phase: (MIN_SCORE, VOLUME_MIN_RATIO, RSI_BULL_MIN, RSI_BULL_MAX,
-    #          RSI_BEAR_MIN, RSI_BEAR_MAX, h4_hard_gate, sessions_active)
-    1: dict(min_score=1, volume_ratio=0.0, rsi_bull=(35, 60), rsi_bear=(40, 65),
+    # Phase 1: require 2 real signals — eliminates single-indicator noise trades
+    # that would pollute the ML training set with garbage patterns.
+    # Wide RSI zones and no session/volume filter to still capture variety.
+    1: dict(min_score=2, volume_ratio=0.0, rsi_bull=(35, 62), rsi_bear=(38, 65),
             h4_hard_gate=False, sessions={}),
     2: dict(min_score=2, volume_ratio=0.5, rsi_bull=(38, 58), rsi_bear=(42, 62),
             h4_hard_gate=False, sessions={}),
