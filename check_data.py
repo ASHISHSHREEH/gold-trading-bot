@@ -23,12 +23,20 @@ def line(char="─", w=60):
 
 
 def connect():
-    path = os.getenv("MT5_PATH", "")
+    # Try auto-connect first (works when MT5 is already open and logged in)
+    if mt5.initialize():
+        return
+
+    # Fallback: explicit credentials
+    path     = os.getenv("MT5_PATH", "")
+    login    = int(os.getenv("MT5_LOGIN", "0"))
+    password = os.getenv("MT5_PASSWORD", "")
+    server   = os.getenv("MT5_SERVER", "")
     ok = mt5.initialize(
         path     = path if path else None,
-        login    = int(os.getenv("MT5_LOGIN", "0")),
-        password = os.getenv("MT5_PASSWORD", ""),
-        server   = os.getenv("MT5_SERVER", ""),
+        login    = login if login else None,
+        password = password if password else None,
+        server   = server if server else None,
     )
     if not ok:
         print(f"MT5 connection failed: {mt5.last_error()}")
