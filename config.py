@@ -59,6 +59,11 @@ RSI_BEAR_MAX = 65   # REAL MONEY: 60
 #   }
 SESSIONS = {}
 
+# ── Signal Score Threshold ────────────────────────────────────────────────────
+# DATA COLLECTION: 1 — fires on minimal confluence, maximises trade count
+# REAL MONEY:      3 — requires H4+M15+RSI+BB all agreeing
+MIN_SCORE = 1
+
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
 MAX_DAILY_LOSS = 0.03

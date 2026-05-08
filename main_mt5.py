@@ -280,23 +280,10 @@ def generate_signal(
     reasons   = [f"H4: {htf_dir}", f"H1: {trend_dir}"]
     score     = 0
 
-    # ── H4 hard gate — blocks trades against the big-picture trend ────────────
-    if is_bull and htf_bear:
-        reasons.append(f"BLOCKED: H4 {htf_dir} conflicts with H1 {trend_dir}")
-        return {
-            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
-            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
-            "rsi": rsi, "macd": confirm["macd"],
-            "bb": bb["position"], "volume_ok": entry["volume_ok"],
-        }
-    if is_bear and htf_bull:
-        reasons.append(f"BLOCKED: H4 {htf_dir} conflicts with H1 {trend_dir}")
-        return {
-            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
-            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
-            "rsi": rsi, "macd": confirm["macd"],
-            "bb": bb["position"], "volume_ok": entry["volume_ok"],
-        }
+    # ── H4 gate — DATA COLLECTION mode: soft (lose bonus, don't block) ──────
+    # REAL MONEY: restore hard block (return NEUTRAL when H4 conflicts with H1)
+    if (is_bull and htf_bear) or (is_bear and htf_bull):
+        reasons.append(f"H4 {htf_dir} conflicts with H1 {trend_dir} — no H4 bonus")
 
     # ── Volume hard gate ───────────────────────────────────────────────────────
     if not entry["volume_ok"]:
@@ -309,6 +296,17 @@ def generate_signal(
         }
 
     signal = "NEUTRAL"
+
+    # DATA COLLECTION: also trade when H1 is NEUTRAL but H4 has clear direction
+    if not (is_bull or is_bear):
+        if htf_bull:
+            is_bull   = True
+            trend_dir = "BULL"
+            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
+        elif htf_bear:
+            is_bear   = True
+            trend_dir = "BEAR"
+            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
 
     if is_bull or is_bear:
         # H4 actively confirms H1 → bonus point
@@ -337,7 +335,7 @@ def generate_signal(
             if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER", "WALKING_UP"):
                 score += 1
                 reasons.append(f"BB {bb['position']}")
-            signal = "BUY" if score >= 2 else "NEUTRAL"
+            signal = "BUY" if score >= config.MIN_SCORE else "NEUTRAL"
 
         else:  # is_bear
             if _rsi_in_bear_zone(rsi):
@@ -349,10 +347,10 @@ def generate_signal(
             if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER", "WALKING_DOWN"):
                 score += 1
                 reasons.append(f"BB {bb['position']}")
-            signal = "SELL" if score >= 2 else "NEUTRAL"
+            signal = "SELL" if score >= config.MIN_SCORE else "NEUTRAL"
 
     else:
-        reasons.append("No clear H1 trend — standing aside")
+        reasons.append("No clear H1 or H4 trend — standing aside")
 
     # M1 timing confirmation — adds +1 if momentum agrees
     if signal != "NEUTRAL":
