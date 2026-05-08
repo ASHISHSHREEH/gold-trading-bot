@@ -40,6 +40,10 @@ from trading.mt5_position_manager import MT5PositionManager
 from trading.trade_snapshot       import save_trade_snapshot
 from database.trade_logger        import TradeLogger
 from learning.learning_engine     import LearningEngine
+from indicators.swing_levels      import (
+    find_swing_low, find_swing_high,
+    detect_sl_hunt, detect_breakout_retest,
+)
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
@@ -77,6 +81,10 @@ _SYMBOL_LABELS = {
 #           partial_done, breakeven_done, trail_sl,
 #           market_snapshot (for RL update on close)}
 _pos_state: Dict[int, Dict[str, Any]] = {}
+
+# Re-entry tracker: symbol → {direction, sl_price, entry_price, atr, closed_at_epoch}
+# Populated when a position closes at SL; enables re-entry if price immediately reverses
+_sl_hunt_tracker: Dict[str, Dict[str, Any]] = {}
 
 # ── AI Learning Engine (singleton, initialised in main()) ──────────────────────
 _ai_engine: Optional[LearningEngine] = None
@@ -169,8 +177,8 @@ def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, 
 
 
 def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
-    """M5: RSI pullback zone + BB position + volume gate (Upgrade 2, 5) + ATR."""
-    candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
+    """M5: RSI + BB + volume + swing levels + spike filter + breakout detector."""
+    candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5, 60)
     df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
     if df.empty or len(df) < 30:
         logger.warning(f"[{symbol}] Insufficient M5 data.")
@@ -184,7 +192,7 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     rsi_val = float(df["rsi"].iloc[-1]) if not df["rsi"].isna().iloc[-1] else None
     bb_ana  = _IND["bb"].analyze_latest(df["close"], bb_df)
 
-    # Volume gate (Upgrade 5) — prefer tick_volume, fall back to volume column
+    # Volume gate
     vol_col   = "tick_volume" if "tick_volume" in df.columns else "volume"
     volume_ok = False
     if vol_col in df.columns and len(df) >= config.VOLUME_LOOKBACK + 1:
@@ -192,15 +200,36 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
         cur_vol   = float(df[vol_col].iloc[-1])
         volume_ok = avg_vol > 0 and (cur_vol / avg_vol) >= config.VOLUME_MIN_RATIO
 
+    # Swing levels for SL placement
+    swing_low  = find_swing_low(df,  lookback=15)
+    swing_high = find_swing_high(df, lookback=15)
+
+    # SL-hunt spike detection
+    spike_info = detect_sl_hunt(df, wick_ratio=2.5)
+
+    # Breakout + retest detection
+    breakout_info = detect_breakout_retest(df, atr=atr_val or 1.0)
+
     return {
-        "timeframe": config.ENTRY_TIMEFRAME,
-        "price":     float(df["close"].iloc[-1]),
-        "timestamp": df.index[-1],
-        "atr":       atr_val,
-        "rsi":       rsi_val,
-        "bb":        bb_ana,
-        "volume_ok": volume_ok,
+        "timeframe":    config.ENTRY_TIMEFRAME,
+        "price":        float(df["close"].iloc[-1]),
+        "timestamp":    df.index[-1],
+        "atr":          atr_val,
+        "rsi":          rsi_val,
+        "bb":           bb_ana,
+        "volume_ok":    volume_ok,
+        "swing_low":    swing_low,
+        "swing_high":   swing_high,
+        "spike":        spike_info,
+        "breakout":     breakout_info,
+        "spread":       entry_spread(fetcher, symbol),
+        "volume_ratio": (cur_vol / avg_vol) if volume_ok else 0.0,
     }
+
+
+def entry_spread(fetcher: MT5DataFetcher, symbol: str) -> Optional[float]:
+    tick = fetcher.get_current_tick(symbol)
+    return tick.get("spread") if tick else None
 
 
 def analyse_timing(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
@@ -375,6 +404,55 @@ def generate_signal(
                 f"M1 timing {t_dir} (MACD={timing['macd']} RSI={rsi_str})"
             )
 
+    # ── SL-hunt spike filter ───────────────────────────────────────────────────
+    spike = entry.get("spike", {})
+    if spike.get("is_hunt"):
+        hunt_dir = spike["direction"]
+        # After a BULL_HUNT spike (price spiked down then reversed) → favour BUY
+        # After a BEAR_HUNT spike (price spiked up then reversed)  → favour SELL
+        if (signal == "BUY"  and hunt_dir == "BULL_HUNT") or \
+           (signal == "SELL" and hunt_dir == "BEAR_HUNT"):
+            score += 1
+            reasons.append(f"SL-hunt reversal detected ({hunt_dir}) — extra confidence")
+        elif signal != "NEUTRAL":
+            # spike is against our direction — block entry
+            reasons.append(f"SL-hunt spike against direction ({hunt_dir}) — blocked")
+            signal = "NEUTRAL"
+
+    # ── Breakout + retest bonus ────────────────────────────────────────────────
+    breakout = entry.get("breakout", {})
+    if breakout.get("breakout"):
+        bo_type = breakout["type"]
+        level   = breakout["level"]
+        bars    = breakout["bars_since_bo"]
+        if (signal == "BUY"  and bo_type == "BULL_RETEST") or \
+           (signal == "SELL" and bo_type == "BEAR_RETEST"):
+            score += 1
+            reasons.append(
+                f"Breakout retest {bo_type} @ {level:.2f} ({bars} bars ago) — +1"
+            )
+        elif signal == "NEUTRAL":
+            # Breakout retest alone can generate a signal if score threshold is low
+            if bo_type == "BULL_RETEST":
+                signal = "BUY"
+                score  += 1
+                reasons.append(f"Breakout retest BUY @ {level:.2f} ({bars} bars ago)")
+            elif bo_type == "BEAR_RETEST":
+                signal = "SELL"
+                score  += 1
+                reasons.append(f"Breakout retest SELL @ {level:.2f} ({bars} bars ago)")
+
+    # ── Swing-based SL calculation ─────────────────────────────────────────────
+    # Place SL just beyond the nearest swing low (BUY) or swing high (SELL)
+    # with a small ATR buffer so it sits past the hunt zone
+    atr      = entry.get("atr") or 0
+    sl_buf   = atr * 0.3   # 30% ATR buffer beyond swing point
+    swing_sl = None
+    if signal == "BUY" and entry.get("swing_low"):
+        swing_sl = entry["swing_low"] - sl_buf
+    elif signal == "SELL" and entry.get("swing_high"):
+        swing_sl = entry["swing_high"] + sl_buf
+
     confidence = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
 
     return {
@@ -389,6 +467,9 @@ def generate_signal(
         "bb":         bb["position"],
         "volume_ok":  entry["volume_ok"],
         "m1":         timing["direction"],
+        "swing_sl":   swing_sl,
+        "spike":      spike,
+        "breakout":   breakout,
     }
 
 
@@ -674,6 +755,38 @@ def scan_symbol(
         return
 
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
+
+    # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
+    import time as _t
+    hunt = _sl_hunt_tracker.get(symbol)
+    if hunt and signal_data["signal"] == "NEUTRAL":
+        age_mins = (_t.time() - hunt["closed_at"]) / 60.0
+        if age_mins <= 15:   # within 3 M5 candles of the hunt
+            current_price = entry["price"]
+            entry_price   = hunt["entry_price"]
+            direction     = hunt["direction"]
+            atr           = hunt["atr"]
+            # Price must have reversed back past original entry
+            reversed_back = (
+                (direction == "BUY"  and current_price >= entry_price) or
+                (direction == "SELL" and current_price <= entry_price)
+            )
+            if reversed_back:
+                signal_data["signal"]     = direction
+                signal_data["score"]      = signal_data.get("score", 0) + 2
+                signal_data["confidence"] = "HIGH"
+                signal_data["reasons"].append(
+                    f"RE-ENTRY after SL hunt — price reversed back past entry "
+                    f"({entry_price:.2f}) within {age_mins:.0f} min"
+                )
+                logger.info(
+                    "[RE-ENTRY] %s %s — hunt reversed in %.0f min",
+                    symbol, direction, age_mins,
+                )
+                del _sl_hunt_tracker[symbol]
+        else:
+            del _sl_hunt_tracker[symbol]   # too old, clear it
+
     display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
@@ -723,8 +836,9 @@ def scan_symbol(
     execution = executor.execute_signal(
         signal          = signal_data["signal"],
         risk_multiplier = risk_mult,
-        atr_value = entry["atr"],
-        symbol    = symbol,
+        atr_value       = entry["atr"],
+        symbol          = symbol,
+        custom_sl       = signal_data.get("swing_sl"),
     )
 
     if execution:
@@ -862,6 +976,27 @@ def _detect_and_notify_closed_positions(
             entry_price  = float(state.get("entry_price", 0)),
             exit_price   = exit_price,
         )
+
+        # ── SL-hunt re-entry tracker ───────────────────────────────────────────
+        # If position closed at (or very close to) the SL, flag it for potential
+        # re-entry in case big-money hunted the stop before reversing.
+        initial_sl = state.get("initial_sl")
+        sym        = state.get("symbol")
+        atr        = state.get("atr") or 1.0
+        if initial_sl and sym and profit < 0:
+            sl_distance = abs(exit_price - initial_sl)
+            if sl_distance < atr * 0.5:   # closed within 0.5 ATR of SL = likely a hunt
+                _sl_hunt_tracker[sym] = {
+                    "direction":   state.get("direction"),
+                    "entry_price": state.get("entry_price"),
+                    "sl_price":    initial_sl,
+                    "atr":         atr,
+                    "closed_at":   close_ts,
+                }
+                logger.info(
+                    "[SL-HUNT] %s %s closed near SL (dist=%.2f, atr=%.2f) — watching for reversal",
+                    sym, state.get("direction"), sl_distance, atr,
+                )
 
         # Notify AI engine for RL online update
         if _ai_engine is not None:

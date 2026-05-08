@@ -51,6 +51,7 @@ class MT5Executor:
         atr_value: float,
         symbol: str,
         risk_multiplier: float = 1.0,
+        custom_sl: float = None,
     ) -> Optional[Dict[str, Any]]:
         if mt5 is None:
             return None
@@ -66,12 +67,20 @@ class MT5Executor:
         is_buy = signal.upper() == "BUY"
         price  = tick["ask"] if is_buy else tick["bid"]
 
-        sl, tp = self._calculate_sl_tp(price, atr_value, is_buy, sym_info)
+        if custom_sl is not None:
+            # Swing-based SL supplied — derive TP to maintain MIN_RR_RATIO
+            sl        = custom_sl
+            sl_dist   = abs(price - sl)
+            tp        = price + sl_dist * config.MIN_RR_RATIO if is_buy else price - sl_dist * config.MIN_RR_RATIO
+            digits    = sym_info["digits"]
+            sl        = round(sl, digits)
+            tp        = round(tp, digits)
+        else:
+            sl, tp = self._calculate_sl_tp(price, atr_value, is_buy, sym_info)
         if sl is None:
             return None
 
         rr = abs(tp - price) / abs(sl - price) if abs(sl - price) > 0 else 0
-        # Use a tiny epsilon to avoid floating-point false failures (e.g. 1.9999 < 2.0)
         if rr < config.MIN_RR_RATIO - 0.001:
             logger.warning(f"[{symbol}] R:R {rr:.2f} < {config.MIN_RR_RATIO}. Blocked.")
             return None
