@@ -114,8 +114,8 @@ RUN_ONCE      = False
 # Phase 1 (0–199):   data collection — fire on almost anything
 # Phase 2 (200–499): transitional   — require moderate confluence
 # Phase 3 (500+):    strict         — institutional-grade filters
-MODE_PHASE1_TRADES = 200   # trades needed to leave data-collection phase
-MODE_PHASE2_TRADES = 500   # trades needed to enter strict phase
+MODE_PHASE1_TRADES = 0     # skip data-collection phase — go straight to strict
+MODE_PHASE2_TRADES = 0     # skip transitional phase — go straight to strict
 
 _PHASE_SETTINGS = {
     # Phase 1: require 2 real signals — eliminates single-indicator noise trades
