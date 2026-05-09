@@ -35,10 +35,22 @@ from indicators.rsi               import RSICalculator
 from indicators.macd              import MACDCalculator
 from indicators.bollinger         import BollingerBandsCalculator
 from indicators.moving_average    import MovingAverageCalculator
+from indicators.adx               import ADXCalculator
 from trading.mt5_executor         import MT5Executor
 from trading.mt5_position_manager import MT5PositionManager
 from database.trade_logger        import TradeLogger
 from learning.learning_engine     import LearningEngine
+from indicators.swing_levels      import (
+    find_swing_low, find_swing_high,
+    detect_sl_hunt, detect_breakout_retest,
+)
+from indicators.news_filter       import is_news_blackout, check_atr_spike
+from notifications.telegram_notifier import (
+    alert_bot_started, alert_bot_stopped,
+    alert_trade_opened, alert_trade_closed,
+    alert_drawdown, alert_connection_lost,
+    alert_news_block, alert_daily_summary,
+)
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
@@ -60,6 +72,7 @@ _IND = {
     "macd": MACDCalculator(),
     "bb":   BollingerBandsCalculator(period=20, std_dev=2),
     "ma":   MovingAverageCalculator(),
+    "adx":  ADXCalculator(period=config.ADX_PERIOD),
 }
 _MA_PERIODS_TREND = [50, 200]   # H1 — slow, reliable trend filter
 _MA_PERIODS_ENTRY = [20, 50]    # M15/M5 — faster, for confirmation
@@ -191,14 +204,34 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
         cur_vol   = float(df[vol_col].iloc[-1])
         volume_ok = avg_vol > 0 and (cur_vol / avg_vol) >= config.VOLUME_MIN_RATIO
 
+    # ADX regime detection
+    adx_info = _IND["adx"].get_latest(df)
+
+    # Swing levels for SL placement
+    swing_low  = find_swing_low(df,  lookback=15)
+    swing_high = find_swing_high(df, lookback=15)
+
+    # SL-hunt spike detection
+    spike_info = detect_sl_hunt(df, wick_ratio=2.5)
+
+    # Breakout + retest detection
+    breakout_info = detect_breakout_retest(df, atr=atr_val or 1.0)
+
     return {
-        "timeframe": config.ENTRY_TIMEFRAME,
-        "price":     float(df["close"].iloc[-1]),
-        "timestamp": df.index[-1],
-        "atr":       atr_val,
-        "rsi":       rsi_val,
-        "bb":        bb_ana,
-        "volume_ok": volume_ok,
+        "timeframe":    config.ENTRY_TIMEFRAME,
+        "price":        float(df["close"].iloc[-1]),
+        "timestamp":    df.index[-1],
+        "atr":          atr_val,
+        "rsi":          rsi_val,
+        "bb":           bb_ana,
+        "volume_ok":    volume_ok,
+        "swing_low":    swing_low,
+        "swing_high":   swing_high,
+        "spike":        spike_info,
+        "breakout":     breakout_info,
+        "adx":          adx_info,
+        "spread":       entry_spread(fetcher, symbol),
+        "volume_ratio": (cur_vol / avg_vol) if volume_ok else 0.0,
     }
 
 
@@ -302,18 +335,24 @@ def generate_signal(
             "bb": bb["position"], "volume_ok": False,
         }
 
+    # ── ADX regime gate — block entries in ranging/choppy markets ────────────
+    adx_info = entry.get("adx", {})
+    adx_val  = adx_info.get("adx", 0)
+    if adx_val > 0 and adx_val < config.ADX_MIN_TREND:
+        reasons.append(
+            f"BLOCKED: ADX {adx_val:.1f} < {config.ADX_MIN_TREND} — ranging market, signals unreliable"
+        )
+        return {
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": entry["volume_ok"],
+            "adx": adx_val,
+        }
+
     signal = "NEUTRAL"
 
-    # DATA COLLECTION: also trade when H1 is NEUTRAL but H4 has clear direction
-    if not (is_bull or is_bear):
-        if htf_bull:
-            is_bull   = True
-            trend_dir = "BULL"
-            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
-        elif htf_bear:
-            is_bear   = True
-            trend_dir = "BEAR"
-            reasons.append(f"H1 NEUTRAL — using H4 {htf_dir} as direction")
+    # H1 must have a clear direction — H4-only fallback removed.
 
     if is_bull or is_bear:
         # H4 actively confirms H1 → bonus point
@@ -710,6 +749,17 @@ def scan_symbol(
         display_execution(symbol, execution)
         logger_db.log_trade_open(execution)
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="EXECUTED")
+        alert_trade_opened(
+            symbol    = symbol,
+            direction = execution["direction"],
+            entry     = execution["entry_price"],
+            sl        = execution["stop_loss"],
+            tp        = execution["take_profit"],
+            lots      = execution.get("volume", 0),
+            currency  = execution.get("currency", ""),
+            score     = signal_data.get("score", 0),
+            reasons   = signal_data.get("reasons", []),
+        )
 
         # ── Store ML features for future training ──────────────────────────────
         from datetime import datetime, timezone
@@ -796,6 +846,13 @@ def _detect_and_notify_closed_positions(
 
         # Update TradeLogger close record
         logger_db.log_trade_close(ticket, exit_price, profit, reason="detected")
+        alert_trade_closed(
+            symbol    = state.get("symbol", ""),
+            direction = state.get("direction", ""),
+            profit    = profit,
+            currency  = "",
+            ticket    = ticket,
+        )
 
         # Update learning outcome (WIN/LOSS + realised RR)
         logger_db.update_learning_outcome(
@@ -826,6 +883,24 @@ def _detect_and_notify_closed_positions(
                 entry_market   = state.get("market_snapshot"),
                 current_market = current_market,
             )
+
+
+def _seconds_to_next_candle_close(timeframe: str) -> float:
+    """
+    Returns seconds until the next candle closes on the given timeframe.
+    Scans fire exactly at candle close — eliminates built-in timing slippage.
+    Falls back to SCAN_INTERVAL if timeframe is unrecognised.
+    """
+    tf_seconds = {
+        "M1": 60, "M5": 300, "M15": 900, "M30": 1800,
+        "H1": 3600, "H4": 14400, "D1": 86400,
+    }
+    period = tf_seconds.get(timeframe, config.SCAN_INTERVAL)
+    now    = time.time()
+    elapsed_in_candle = now % period
+    remaining = period - elapsed_in_candle
+    # Add a small buffer (2s) so the candle is fully formed in MT5 before we fetch
+    return max(remaining + 2, 5)
 
 
 def run_scan(
@@ -876,6 +951,69 @@ def run_scan(
             traceback.print_exc()
 
     display_stats(logger_db.get_statistics())
+
+
+# ── Position Reconciliation ────────────────────────────────────────────────────
+
+def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
+    """
+    On startup, rebuild _pos_state from any MT5 positions already open.
+    Estimates ATR from current M5 data so trailing stop + partial TP work correctly.
+    """
+    existing = pos_mgr_global.get_open_positions() if False else []
+
+    try:
+        import MetaTrader5 as mt5
+        raw = []
+        for sym in config.SYMBOLS:
+            positions = mt5.positions_get(symbol=sym)
+            if positions:
+                for p in positions:
+                    if p.magic == config.MAGIC:
+                        raw.append(p)
+    except Exception as exc:
+        logger.warning("Reconcile: could not query MT5 positions — %s", exc)
+        return
+
+    if not raw:
+        logger.info("Reconcile: no pre-existing positions found.")
+        return
+
+    logger.info("Reconcile: found %d pre-existing position(s) — rebuilding state.", len(raw))
+
+    for p in raw:
+        if p.ticket in _pos_state:
+            continue
+
+        # Estimate ATR from current M5 data
+        atr_val = None
+        try:
+            df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, config.ENTRY_CANDLES, p.symbol)
+            if not df.empty:
+                atr_val = _IND["atr"].get_latest(df)
+        except Exception:
+            pass
+
+        direction = "BUY" if p.type == 0 else "SELL"
+        _pos_state[p.ticket] = {
+            "symbol":         p.symbol,
+            "direction":      direction,
+            "entry_price":    p.price_open,
+            "initial_sl":     p.sl,
+            "atr":            atr_val or abs(p.price_open - p.sl) if p.sl else None,
+            "partial_done":   False,
+            "breakeven_done": p.sl >= p.price_open if direction == "BUY" and p.sl else False,
+            "trail_sl":       p.sl,
+            "market_snapshot": {},
+            "is_pyramid":     False,
+            "pyramid_adds":   0,
+            "reconciled":     True,
+        }
+        logger.info(
+            "Reconcile: ticket=%d %s %s entry=%.2f sl=%.2f atr=%s",
+            p.ticket, p.symbol, direction, p.price_open, p.sl,
+            f"{atr_val:.2f}" if atr_val else "estimated",
+        )
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
@@ -966,6 +1104,17 @@ def main():
         f"balance={acct['balance']:.2f} {acct['currency']}"
     )
 
+    # ── Reconcile open positions from MT5 on startup ───────────────────────────
+    _reconcile_positions(fetcher)
+
+    # ── Notify startup ─────────────────────────────────────────────────────────
+    alert_bot_started(
+        symbols  = config.SYMBOLS,
+        balance  = acct["balance"],
+        currency = acct["currency"],
+        phase    = current_phase,
+    )
+
     scan       = 0
     start_time = time.time()
 
@@ -984,10 +1133,9 @@ def main():
                 print("\n  RUN_ONCE=True — exiting.")
                 break
 
-            elapsed   = time.time() - cycle_start
-            sleep_for = max(0, config.SCAN_INTERVAL - elapsed)
+            sleep_for = _seconds_to_next_candle_close(config.ENTRY_TIMEFRAME)
             _line()
-            print(f"  Next scan in {sleep_for:.0f}s  (Ctrl+C to stop)")
+            print(f"  Next scan in {sleep_for:.0f}s — waiting for M5 candle close  (Ctrl+C to stop)")
             time.sleep(sleep_for)
 
     except KeyboardInterrupt:
@@ -1014,12 +1162,23 @@ def main():
         print(f"  Symbols      : {', '.join(config.SYMBOLS)}")
         print(f"  Start balance: {acct['balance']:.2f} {acct.get('currency', '')}")
         print(f"  End balance  : {final.get('balance', 0):.2f}")
-        print(f"  Net P&L      : {final.get('balance', 0) - acct['balance']:.2f}")
+        net_pnl = final.get("balance", 0) - acct["balance"]
+        print(f"  Net P&L      : {net_pnl:.2f}")
         print(f"  Total trades : {stats.get('total_trades', 0)}")
         print(f"  Win rate     : {stats.get('win_rate', 0):.1f}%")
         print(f"  Profit factor: {stats.get('profit_factor', 0):.2f}")
         _line("═")
         print()
+
+        alert_daily_summary(
+            balance       = final.get("balance", 0),
+            equity        = final.get("equity",  0),
+            currency      = acct.get("currency", ""),
+            trades_opened = stats.get("total_trades", 0),
+            trades_closed = stats.get("closed_trades", 0),
+            net_pnl       = net_pnl,
+        )
+        alert_bot_stopped()
 
 
 if __name__ == "__main__":

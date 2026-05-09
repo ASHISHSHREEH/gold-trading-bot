@@ -75,6 +75,12 @@ MIN_RR_RATIO   = 2.0
 VOLUME_LOOKBACK  = 20
 VOLUME_MIN_RATIO = 0.0   # REAL MONEY: 0.8  (0.0 = disabled for data collection)
 
+# ── ADX Regime Filter ─────────────────────────────────────────────────────────
+# Only open new trades when the market is trending (ADX >= ADX_MIN_TREND).
+# ADX < 20 = ranging/choppy — RSI and MACD signals are unreliable in this regime.
+ADX_PERIOD    = 14
+ADX_MIN_TREND = 20    # minimum ADX to allow new entries
+
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
 ATR_SL_MULT = 1.5

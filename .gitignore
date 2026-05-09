@@ -37,6 +37,13 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Trade snapshots (generated images — keep locally, not in git)
+snapshots/
+
+# ML model files
+learning/models/
+learning/q_table.pkl
+
 # Testing
 .pytest_cache/
 .coverage

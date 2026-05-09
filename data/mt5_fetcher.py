@@ -54,11 +54,23 @@ class MT5DataFetcher:
             logger.critical("MetaTrader5 package not installed. Run: pip install MetaTrader5")
             return False
 
+        # Try auto-connect first (works when MT5 is open and logged in, same privilege level)
+        if mt5.initialize():
+            info = mt5.account_info()
+            if info:
+                logger.info(
+                    f"MT5 connected (auto) | Account: {info.login} | Server: {info.server} | "
+                    f"Balance: {info.balance:.2f} {info.currency} | Leverage: 1:{info.leverage}"
+                )
+                return self._post_connect()
+
+        # Fallback: explicit credentials + optional path
         init_kwargs = dict(
-            login    = config.MT5_LOGIN,
-            password = config.MT5_PASSWORD,
-            server   = config.MT5_SERVER,
+            login    = config.MT5_LOGIN    if config.MT5_LOGIN    else None,
+            password = config.MT5_PASSWORD if config.MT5_PASSWORD else None,
+            server   = config.MT5_SERVER   if config.MT5_SERVER   else None,
         )
+        init_kwargs = {k: v for k, v in init_kwargs.items() if v is not None}
         if config.MT5_PATH:
             init_kwargs["path"] = config.MT5_PATH
 
@@ -71,21 +83,19 @@ class MT5DataFetcher:
             f"MT5 connected | Account: {info.login} | Server: {info.server} | "
             f"Balance: {info.balance:.2f} {info.currency} | Leverage: 1:{info.leverage}"
         )
+        return self._post_connect()
 
-        # Enable all configured symbols in MarketWatch
+    def _post_connect(self) -> bool:
+        """Enable symbols in MarketWatch after a successful mt5.initialize()."""
         failed = []
         for sym in config.SYMBOLS:
             if not mt5.symbol_select(sym, True):
                 failed.append(sym)
 
         if failed:
-            # Find available alternatives and report
-            all_syms  = mt5.symbols_get() or []
-            available = [s.name for s in all_syms]
             logger.error(
                 f"Symbols not available on this account: {failed}\n"
-                f"  Tip: check MT5_SYMBOLS in .env against what the broker offers.\n"
-                f"  Run the symbol-discovery command to list available instruments."
+                f"  Tip: check MT5_SYMBOLS in .env against what the broker offers."
             )
             mt5.shutdown()
             return False
