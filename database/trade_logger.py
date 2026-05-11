@@ -152,7 +152,7 @@ class TradeLogger:
         self.conn.commit()
         logger.info(
             f"Session {self._session_id} closed | "
-            f"net P&L={stats.get('total_profit', 0):.2f}"
+            f"net P&L={stats.get('total_profit') or 0:.2f}"
         )
 
     # ── Trade Recording ────────────────────────────────────────────────────────
