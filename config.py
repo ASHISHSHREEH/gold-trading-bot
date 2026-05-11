@@ -112,7 +112,7 @@ _PHASE_SETTINGS = {
             h4_hard_gate=False, sessions={}),
     2: dict(min_score=2, volume_ratio=0.5, rsi_bull=(38, 58), rsi_bear=(42, 62),
             h4_hard_gate=False, sessions={}),
-    3: dict(min_score=3, volume_ratio=0.6, rsi_bull=(40, 55), rsi_bear=(45, 60),
+    3: dict(min_score=3, volume_ratio=0.0, rsi_bull=(40, 55), rsi_bear=(45, 60),
             h4_hard_gate=True,
             sessions={"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}),
 }
