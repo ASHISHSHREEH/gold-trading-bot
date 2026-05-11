@@ -154,6 +154,18 @@ def analyse_trend(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     }
 
 
+def entry_spread(fetcher: MT5DataFetcher, symbol: str) -> float:
+    """Return current bid/ask spread in price units (0.0 if unavailable)."""
+    try:
+        import MetaTrader5 as mt5
+        tick = mt5.symbol_info_tick(symbol)
+        if tick and tick.ask > 0 and tick.bid > 0:
+            return round(tick.ask - tick.bid, 5)
+    except Exception:
+        pass
+    return 0.0
+
+
 def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """M15: confirm the H1 trend via MA structure + MACD direction."""
     df = fetcher.get_historical_data(config.CONFIRM_TIMEFRAME, config.CONFIRM_CANDLES, symbol)
