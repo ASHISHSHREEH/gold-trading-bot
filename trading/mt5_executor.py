@@ -361,8 +361,14 @@ class MT5Executor:
         max_lot  = sym_info["max_lot"]
         lots     = round((raw // lot_step) * lot_step, 8)
         if lots < min_lot:
-            logger.warning(f"Lot {raw:.5f} < min {min_lot}. Skipped.")
-            return 0.0
+            # Use broker minimum rather than skipping — accepts higher risk on demo.
+            # ⚠️  REMINDER: Gold at 0.01 lots ≈ 3-4% risk (not 1%). Fix when
+            #     account reaches ~$1,050 USD (≈165,000 JPY) for proper sizing.
+            logger.warning(
+                f"Lot {raw:.5f} < min {min_lot} — using min lot {min_lot} "
+                f"(~{min_lot/raw*100:.0f}% of intended risk, demo only)."
+            )
+            return min_lot
         return min(lots, max_lot)
 
     def _send_with_retry(self, request: dict, symbol: str, max_retries: int = 3):
