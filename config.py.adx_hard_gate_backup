@@ -76,12 +76,10 @@ VOLUME_LOOKBACK  = 20
 VOLUME_MIN_RATIO = 0.0   # REAL MONEY: 0.8  (0.0 = disabled for data collection)
 
 # ── ADX Regime Filter ─────────────────────────────────────────────────────────
-# ADX >= ADX_MIN_TREND → trending market → +1 score bonus
-# ADX <  ADX_MIN_TREND → ranging market  → no bonus, but NOT a hard block
-# A strong 3-timeframe signal (H4+H1+M15+RSI+BB) can still fire with low ADX.
-# To restore the old hard block: see main_mt5.py.adx_hard_gate_backup
+# Only open new trades when the market is trending (ADX >= ADX_MIN_TREND).
+# ADX < 20 = ranging/choppy — RSI and MACD signals are unreliable in this regime.
 ADX_PERIOD    = 14
-ADX_MIN_TREND = 20    # threshold for +1 score bonus (was: hard block minimum)
+ADX_MIN_TREND = 20    # minimum ADX to allow new entries
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14

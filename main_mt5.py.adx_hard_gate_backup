@@ -347,18 +347,20 @@ def generate_signal(
             "bb": bb["position"], "volume_ok": False,
         }
 
-    # ── ADX regime — score point, not a hard block ───────────────────────────
-    # ADX >= ADX_MIN_TREND: trending market → +1 score bonus
-    # ADX <  ADX_MIN_TREND: ranging market  → no bonus, but signal still allowed
-    #   if the other confluence factors (H4+H1+M15+RSI+BB) reach MIN_SCORE.
-    # To restore the hard block: see main_mt5.py.adx_hard_gate_backup
+    # ── ADX regime gate — block entries in ranging/choppy markets ────────────
     adx_info = entry.get("adx", {})
     adx_val  = adx_info.get("adx", 0)
-    if adx_val > 0 and adx_val >= config.ADX_MIN_TREND:
-        score += 1
-        reasons.append(f"ADX {adx_val:.1f} ≥ {config.ADX_MIN_TREND} — trending market")
-    elif adx_val > 0:
-        reasons.append(f"ADX {adx_val:.1f} < {config.ADX_MIN_TREND} — ranging (no bonus)")
+    if adx_val > 0 and adx_val < config.ADX_MIN_TREND:
+        reasons.append(
+            f"BLOCKED: ADX {adx_val:.1f} < {config.ADX_MIN_TREND} — ranging market, signals unreliable"
+        )
+        return {
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": entry["volume_ok"],
+            "adx": adx_val,
+        }
 
     signal = "NEUTRAL"
 
