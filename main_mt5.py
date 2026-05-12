@@ -815,6 +815,7 @@ def scan_symbol(
             "breakeven_done":  False,
             "trail_sl":        execution["stop_loss"],
             "market_snapshot": market_snapshot,
+            "open_epoch":      time.time(),
         }
     else:
         print(f"  [{symbol}] Order failed — check logs.")
@@ -839,16 +840,21 @@ def _detect_and_notify_closed_positions(
     if not closed_tickets:
         return
 
-    # Query MT5 deal history for the last 10 minutes to catch recent closes
-    deals = pos_mgr.get_recently_closed_deals(since_epoch=scan_epoch - 600)
+    # Look back to the oldest open_epoch among closed tickets so long-running
+    # trades (hours/days) are still found in MT5 deal history.
+    oldest_open = min(
+        _pos_state.get(t, {}).get("open_epoch", scan_epoch - 86400)
+        for t in closed_tickets
+    )
+    deals = pos_mgr.get_recently_closed_deals(since_epoch=oldest_open - 60)
     deal_map = {d["ticket"]: d for d in deals}
 
     for ticket in closed_tickets:
         state = _pos_state.get(ticket, {})
         deal  = deal_map.get(ticket)
 
-        profit     = float(deal["profit"])      if deal else 0.0
-        exit_price = float(deal["exit_price"])  if deal else state.get("entry_price", 0.0)
+        profit     = float(deal["profit"])           if deal else 0.0
+        exit_price = float(deal["exit_price"])       if deal else state.get("entry_price", 0.0)
         close_ts   = float(deal["close_time_epoch"]) if deal else scan_epoch
 
         logger.info(
@@ -858,6 +864,9 @@ def _detect_and_notify_closed_positions(
 
         # Update TradeLogger close record
         logger_db.log_trade_close(ticket, exit_price, profit, reason="detected")
+
+        # Remove from state BEFORE any further processing to prevent ghost re-fires
+        del _pos_state[ticket]
         alert_trade_closed(
             symbol    = state.get("symbol", ""),
             direction = state.get("direction", ""),
@@ -1020,6 +1029,7 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
             "is_pyramid":     False,
             "pyramid_adds":   0,
             "reconciled":     True,
+            "open_epoch":     float(p.time),
         }
         logger.info(
             "Reconcile: ticket=%d %s %s entry=%.2f sl=%.2f atr=%s",
@@ -1118,6 +1128,9 @@ def main():
 
     # ── Reconcile open positions from MT5 on startup ───────────────────────────
     _reconcile_positions(fetcher)
+    # Clean zombie DB records (trades with no close_time not open in MT5)
+    open_tickets = list(_pos_state.keys())
+    logger_db.close_zombie_trades(open_tickets)
 
     # ── Notify startup ─────────────────────────────────────────────────────────
     alert_bot_started(
