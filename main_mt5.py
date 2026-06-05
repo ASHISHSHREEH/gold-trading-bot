@@ -388,9 +388,11 @@ def generate_signal(
                 reasons.append(
                     f"RSI pullback {rsi_str} in [{config.RSI_BULL_MIN}–{config.RSI_BULL_MAX}]"
                 )
-            if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER", "WALKING_UP"):
+            # bb["position"] only contains get_position() values ("NEAR_LOWER" etc).
+            # Walking-band trend continuation is in bb["signal"] == "BUY_TREND".
+            if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER") or bb.get("signal") == "BUY_TREND":
                 score += 1
-                reasons.append(f"BB {bb['position']}")
+                reasons.append(f"BB {bb['position']} signal={bb.get('signal')}")
             signal = "BUY" if score >= config.MIN_SCORE else "NEUTRAL"
 
         else:  # is_bear
@@ -400,9 +402,10 @@ def generate_signal(
                 reasons.append(
                     f"RSI rally {rsi_str} in [{config.RSI_BEAR_MIN}–{config.RSI_BEAR_MAX}]"
                 )
-            if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER", "WALKING_DOWN"):
+            # "WALKING_DOWN" is never returned by get_position() — check bb["signal"] instead.
+            if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER") or bb.get("signal") == "SELL_TREND":
                 score += 1
-                reasons.append(f"BB {bb['position']}")
+                reasons.append(f"BB {bb['position']} signal={bb.get('signal')}")
             signal = "SELL" if score >= config.MIN_SCORE else "NEUTRAL"
 
     else:
@@ -850,6 +853,16 @@ def _detect_and_notify_closed_positions(
     for ticket in closed_tickets:
         state = _pos_state.get(ticket, {})
         deal  = deal_map.get(ticket)
+
+        # Fallback: query by position ID directly — catches cases where the
+        # time-range bulk query returned an empty or incomplete deal list.
+        if deal is None:
+            deal = pos_mgr.get_deal_for_position(ticket)
+            if deal is None:
+                logger.warning(
+                    "[close] No deal found for ticket=%d %s — profit/exit_price unavailable.",
+                    ticket, state.get("symbol", ""),
+                )
 
         profit     = float(deal["profit"])           if deal else 0.0
         exit_price = float(deal["exit_price"])       if deal else state.get("entry_price", 0.0)

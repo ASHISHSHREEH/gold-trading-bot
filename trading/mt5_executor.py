@@ -344,15 +344,22 @@ class MT5Executor:
         return config.ACCOUNT_FX_RATE
 
     def _calculate_lots(self, price, sl, balance, sym_info, account_currency: str = "USD") -> float:
-        sl_distance   = abs(price - sl)
-        contract_size = sym_info["contract_size"]
+        sl_distance     = abs(price - sl)
+        contract_size   = sym_info["contract_size"]
+        profit_currency = sym_info.get("currency_profit", "USD")
         if sl_distance == 0 or contract_size == 0:
             return 0.0
 
-        # Convert account balance to USD using live FX rate.
-        fx_rate     = self._get_fx_rate(account_currency)
-        balance_usd = balance / fx_rate
-        raw_lots    = (balance_usd * config.RISK_PER_TRADE) / (sl_distance * contract_size)
+        # Risk expressed in the instrument's profit currency.
+        # Japan225 profit=JPY in a JPY account → no FX conversion needed.
+        # GOLD/NASDAQ/SP500 profit=USD in a JPY account → convert JPY→USD.
+        if profit_currency.upper() == account_currency.upper():
+            risk_in_profit = balance * config.RISK_PER_TRADE
+        else:
+            fx_rate = self._get_fx_rate(account_currency)   # account units per 1 USD
+            risk_in_profit = (balance / fx_rate) * config.RISK_PER_TRADE
+
+        raw_lots = risk_in_profit / (sl_distance * contract_size)
         return self._round_lots(raw_lots, sym_info)
 
     def _round_lots(self, raw: float, sym_info: dict) -> float:
