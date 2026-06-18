@@ -152,7 +152,7 @@ class TradeLogger:
         self.conn.commit()
         logger.info(
             f"Session {self._session_id} closed | "
-            f"net P&L={stats.get('total_profit', 0):.2f}"
+            f"net P&L={stats.get('total_profit') or 0:.2f}"
         )
 
     # ── Trade Recording ────────────────────────────────────────────────────────
@@ -203,6 +203,33 @@ class TradeLogger:
             self.conn.commit()
         except sqlite3.Error as e:
             logger.error(f"log_trade_close failed: {e}")
+
+    def close_zombie_trades(self, open_tickets: list) -> int:
+        """
+        Mark DB trades as closed if they are no longer open in MT5.
+        Called on startup to clean up records from crashed/interrupted sessions.
+        Returns number of records fixed.
+        """
+        try:
+            cur = self.conn.execute(
+                "SELECT ticket FROM trades WHERE close_time IS NULL"
+            )
+            unclosed = [row[0] for row in cur.fetchall()]
+            zombies  = [t for t in unclosed if t not in open_tickets]
+            for ticket in zombies:
+                self.conn.execute(
+                    """UPDATE trades
+                       SET close_time=?, exit_reason='zombie_cleanup'
+                       WHERE ticket=? AND close_time IS NULL""",
+                    (datetime.now(), ticket),
+                )
+            self.conn.commit()
+            if zombies:
+                logger.info("Cleaned %d zombie trade record(s): %s", len(zombies), zombies)
+            return len(zombies)
+        except sqlite3.Error as e:
+            logger.error(f"close_zombie_trades failed: {e}")
+            return 0
 
     # ── Signal Recording ───────────────────────────────────────────────────────
 

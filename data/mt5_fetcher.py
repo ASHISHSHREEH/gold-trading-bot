@@ -171,12 +171,13 @@ class MT5DataFetcher:
             logger.error(f"get_symbol_info({sym}) failed: {mt5.last_error()}")
             return {}
         return {
-            "contract_size": info.trade_contract_size,
-            "min_lot":       info.volume_min,
-            "max_lot":       info.volume_max,
-            "lot_step":      info.volume_step,
-            "digits":        info.digits,
-            "point":         info.point,
-            "stops_level":   info.trade_stops_level,
-            "spread":        info.spread,
+            "contract_size":   info.trade_contract_size,
+            "currency_profit": info.currency_profit,
+            "min_lot":         info.volume_min,
+            "max_lot":         info.volume_max,
+            "lot_step":        info.volume_step,
+            "digits":          info.digits,
+            "point":           info.point,
+            "stops_level":     info.trade_stops_level,
+            "spread":          info.spread,
         }

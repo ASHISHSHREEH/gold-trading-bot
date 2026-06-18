@@ -38,7 +38,6 @@ from indicators.moving_average    import MovingAverageCalculator
 from indicators.adx               import ADXCalculator
 from trading.mt5_executor         import MT5Executor
 from trading.mt5_position_manager import MT5PositionManager
-from trading.trade_snapshot       import save_trade_snapshot
 from database.trade_logger        import TradeLogger
 from learning.learning_engine     import LearningEngine
 from indicators.swing_levels      import (
@@ -90,10 +89,6 @@ _SYMBOL_LABELS = {
 #           partial_done, breakeven_done, trail_sl,
 #           market_snapshot (for RL update on close)}
 _pos_state: Dict[int, Dict[str, Any]] = {}
-
-# Re-entry tracker: symbol → {direction, sl_price, entry_price, atr, closed_at_epoch}
-# Populated when a position closes at SL; enables re-entry if price immediately reverses
-_sl_hunt_tracker: Dict[str, Dict[str, Any]] = {}
 
 # ── AI Learning Engine (singleton, initialised in main()) ──────────────────────
 _ai_engine: Optional[LearningEngine] = None
@@ -198,8 +193,8 @@ def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, 
 
 
 def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
-    """M5: RSI + BB + volume + swing levels + spike filter + breakout detector."""
-    candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5, 60)
+    """M5: RSI pullback zone + BB position + volume gate (Upgrade 2, 5) + ATR."""
+    candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
     df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
     if df.empty or len(df) < 30:
         logger.warning(f"[{symbol}] Insufficient M5 data.")
@@ -213,7 +208,7 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     rsi_val = float(df["rsi"].iloc[-1]) if not df["rsi"].isna().iloc[-1] else None
     bb_ana  = _IND["bb"].analyze_latest(df["close"], bb_df)
 
-    # Volume gate
+    # Volume gate (Upgrade 5) — prefer tick_volume, fall back to volume column
     vol_col   = "tick_volume" if "tick_volume" in df.columns else "volume"
     volume_ok = False
     if vol_col in df.columns and len(df) >= config.VOLUME_LOOKBACK + 1:
@@ -223,7 +218,6 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
 
     # ADX regime detection
     adx_info = _IND["adx"].get_latest(df)
-
 
     # Swing levels for SL placement
     swing_low  = find_swing_low(df,  lookback=15)
@@ -251,11 +245,6 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
         "spread":       entry_spread(fetcher, symbol),
         "volume_ratio": (cur_vol / avg_vol) if volume_ok else 0.0,
     }
-
-
-def entry_spread(fetcher: MT5DataFetcher, symbol: str) -> Optional[float]:
-    tick = fetcher.get_current_tick(symbol)
-    return tick.get("spread") if tick else None
 
 
 def analyse_timing(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
@@ -358,18 +347,20 @@ def generate_signal(
             "bb": bb["position"], "volume_ok": False,
         }
 
-    # ── ADX regime — score point, not a hard block ───────────────────────────
-    # ADX >= ADX_MIN_TREND: trending market → +1 score bonus
-    # ADX <  ADX_MIN_TREND: ranging market  → no bonus, but signal still allowed
-    #   if the other confluence factors (H4+H1+M15+RSI+BB) reach MIN_SCORE.
-    # To restore the hard block: see main_mt5.py.adx_hard_gate_backup
+    # ── ADX regime gate — block entries in ranging/choppy markets ────────────
     adx_info = entry.get("adx", {})
     adx_val  = adx_info.get("adx", 0)
-    if adx_val > 0 and adx_val >= config.ADX_MIN_TREND:
-        score += 1
-        reasons.append(f"ADX {adx_val:.1f} ≥ {config.ADX_MIN_TREND} — trending market")
-    elif adx_val > 0:
-        reasons.append(f"ADX {adx_val:.1f} < {config.ADX_MIN_TREND} — ranging (no bonus)")
+    if adx_val > 0 and adx_val < config.ADX_MIN_TREND:
+        reasons.append(
+            f"BLOCKED: ADX {adx_val:.1f} < {config.ADX_MIN_TREND} — ranging market, signals unreliable"
+        )
+        return {
+            "signal": "NEUTRAL", "confidence": "LOW", "score": 0,
+            "reasons": reasons, "htf": htf_dir, "trend": trend_dir,
+            "rsi": rsi, "macd": confirm["macd"],
+            "bb": bb["position"], "volume_ok": entry["volume_ok"],
+            "adx": adx_val,
+        }
 
     signal = "NEUTRAL"
 
@@ -399,11 +390,9 @@ def generate_signal(
                 reasons.append(
                     f"RSI pullback {rsi_str} in [{config.RSI_BULL_MIN}–{config.RSI_BULL_MAX}]"
                 )
-            # bb["position"] only contains get_position() values ("NEAR_LOWER" etc).
-            # Walking-band trend continuation is in bb["signal"] == "BUY_TREND".
-            if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER") or bb.get("signal") == "BUY_TREND":
+            if bb["position"] in ("NEAR_LOWER", "BELOW_LOWER", "WALKING_UP"):
                 score += 1
-                reasons.append(f"BB {bb['position']} signal={bb.get('signal')}")
+                reasons.append(f"BB {bb['position']}")
             signal = "BUY" if score >= config.MIN_SCORE else "NEUTRAL"
 
         else:  # is_bear
@@ -413,10 +402,9 @@ def generate_signal(
                 reasons.append(
                     f"RSI rally {rsi_str} in [{config.RSI_BEAR_MIN}–{config.RSI_BEAR_MAX}]"
                 )
-            # "WALKING_DOWN" is never returned by get_position() — check bb["signal"] instead.
-            if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER") or bb.get("signal") == "SELL_TREND":
+            if bb["position"] in ("NEAR_UPPER", "ABOVE_UPPER", "WALKING_DOWN"):
                 score += 1
-                reasons.append(f"BB {bb['position']} signal={bb.get('signal')}")
+                reasons.append(f"BB {bb['position']}")
             signal = "SELL" if score >= config.MIN_SCORE else "NEUTRAL"
 
     else:
@@ -437,55 +425,6 @@ def generate_signal(
                 f"M1 timing {t_dir} (MACD={timing['macd']} RSI={rsi_str})"
             )
 
-    # ── SL-hunt spike filter ───────────────────────────────────────────────────
-    spike = entry.get("spike", {})
-    if spike.get("is_hunt"):
-        hunt_dir = spike["direction"]
-        # After a BULL_HUNT spike (price spiked down then reversed) → favour BUY
-        # After a BEAR_HUNT spike (price spiked up then reversed)  → favour SELL
-        if (signal == "BUY"  and hunt_dir == "BULL_HUNT") or \
-           (signal == "SELL" and hunt_dir == "BEAR_HUNT"):
-            score += 1
-            reasons.append(f"SL-hunt reversal detected ({hunt_dir}) — extra confidence")
-        elif signal != "NEUTRAL":
-            # spike is against our direction — block entry
-            reasons.append(f"SL-hunt spike against direction ({hunt_dir}) — blocked")
-            signal = "NEUTRAL"
-
-    # ── Breakout + retest bonus ────────────────────────────────────────────────
-    breakout = entry.get("breakout", {})
-    if breakout.get("breakout"):
-        bo_type = breakout["type"]
-        level   = breakout["level"]
-        bars    = breakout["bars_since_bo"]
-        if (signal == "BUY"  and bo_type == "BULL_RETEST") or \
-           (signal == "SELL" and bo_type == "BEAR_RETEST"):
-            score += 1
-            reasons.append(
-                f"Breakout retest {bo_type} @ {level:.2f} ({bars} bars ago) — +1"
-            )
-        elif signal == "NEUTRAL":
-            # Breakout retest alone can generate a signal if score threshold is low
-            if bo_type == "BULL_RETEST":
-                signal = "BUY"
-                score  += 1
-                reasons.append(f"Breakout retest BUY @ {level:.2f} ({bars} bars ago)")
-            elif bo_type == "BEAR_RETEST":
-                signal = "SELL"
-                score  += 1
-                reasons.append(f"Breakout retest SELL @ {level:.2f} ({bars} bars ago)")
-
-    # ── Swing-based SL calculation ─────────────────────────────────────────────
-    # Place SL just beyond the nearest swing low (BUY) or swing high (SELL)
-    # with a small ATR buffer so it sits past the hunt zone
-    atr      = entry.get("atr") or 0
-    sl_buf   = atr * 0.3   # 30% ATR buffer beyond swing point
-    swing_sl = None
-    if signal == "BUY" and entry.get("swing_low"):
-        swing_sl = entry["swing_low"] - sl_buf
-    elif signal == "SELL" and entry.get("swing_high"):
-        swing_sl = entry["swing_high"] + sl_buf
-
     confidence = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
 
     return {
@@ -500,9 +439,6 @@ def generate_signal(
         "bb":         bb["position"],
         "volume_ok":  entry["volume_ok"],
         "m1":         timing["direction"],
-        "swing_sl":   swing_sl,
-        "spike":      spike,
-        "breakout":   breakout,
     }
 
 
@@ -788,61 +724,10 @@ def scan_symbol(
         return
 
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
-
-    # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
-    import time as _t
-    hunt = _sl_hunt_tracker.get(symbol)
-    if hunt and signal_data["signal"] == "NEUTRAL":
-        age_mins = (_t.time() - hunt["closed_at"]) / 60.0
-        if age_mins <= 15:   # within 3 M5 candles of the hunt
-            current_price = entry["price"]
-            entry_price   = hunt["entry_price"]
-            direction     = hunt["direction"]
-            atr           = hunt["atr"]
-            # Price must have reversed back past original entry
-            reversed_back = (
-                (direction == "BUY"  and current_price >= entry_price) or
-                (direction == "SELL" and current_price <= entry_price)
-            )
-            if reversed_back:
-                signal_data["signal"]     = direction
-                signal_data["score"]      = signal_data.get("score", 0) + 2
-                signal_data["confidence"] = "HIGH"
-                signal_data["reasons"].append(
-                    f"RE-ENTRY after SL hunt — price reversed back past entry "
-                    f"({entry_price:.2f}) within {age_mins:.0f} min"
-                )
-                logger.info(
-                    "[RE-ENTRY] %s %s — hunt reversed in %.0f min",
-                    symbol, direction, age_mins,
-                )
-                del _sl_hunt_tracker[symbol]
-        else:
-            del _sl_hunt_tracker[symbol]   # too old, clear it
-
     display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
-    # ── Check pyramid eligibility before normal risk gate ─────────────────────
-    is_pyramid    = False
-    risk_mult     = 1.0
-    pyramid_pos   = None
-
-    if signal_data["signal"] != "NEUTRAL":
-        pyramid_pos = pos_mgr.get_pyramid_eligible(
-            symbol, signal_data["signal"], _pos_state
-        )
-        if pyramid_pos:
-            is_pyramid = True
-            risk_mult  = config.PYRAMID_LOT_RATIO
-            print(
-                f"  PYRAMID  |  Adding to {symbol} {signal_data['signal']}  "
-                f"ticket={pyramid_pos['ticket']}  profit={pyramid_pos['profit']:+.2f}  "
-                f"lot_ratio={risk_mult:.0%}"
-            )
-
-    # Normal risk gate — skipped for duplicate-symbol check on pyramid path
-    risk = pos_mgr.check_risk_limits(symbol=symbol, allow_pyramid=is_pyramid)
+    risk = pos_mgr.check_risk_limits(symbol=symbol)
     if not risk["can_open_new"]:
         print(f"  GATE: {'; '.join(risk['reasons'])}")
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="BLOCKED")
@@ -851,33 +736,6 @@ def scan_symbol(
     if signal_data["signal"] == "NEUTRAL":
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="NEUTRAL")
         return
-
-    # ── News filter — block new entries around high-impact events ─────────────
-    if config.NEWS_FILTER_ENABLED:
-        # Layer 1: economic calendar blackout
-        blocked, reason = is_news_blackout(
-            buffer_before_min = config.NEWS_BUFFER_BEFORE_MIN,
-            buffer_after_min  = config.NEWS_BUFFER_AFTER_MIN,
-        )
-        if not blocked:
-            # Layer 2: ATR spike guard (catches unscheduled surprises)
-            try:
-                candles_atr = max(config.ENTRY_CANDLES, 30)
-                atr_df      = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles_atr, symbol)
-                if not atr_df.empty:
-                    atr_series  = _IND["atr"].calculate(atr_df)
-                    blocked, reason = check_atr_spike(
-                        current_atr = entry["atr"],
-                        atr_series  = atr_series,
-                        spike_mult  = config.NEWS_ATR_SPIKE_MULT,
-                    )
-            except Exception:
-                pass
-
-        if blocked:
-            print(f"  [{symbol}] {reason}")
-            logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="NEWS_BLOCK")
-            return
 
     # ── AI layer vote ──────────────────────────────────────────────────────────
     ai_decision = None
@@ -894,11 +752,9 @@ def scan_symbol(
             logger.error("[%s] AI vote error — proceeding without AI: %s", symbol, exc)
 
     execution = executor.execute_signal(
-        signal          = signal_data["signal"],
-        risk_multiplier = risk_mult,
-        atr_value       = entry["atr"],
-        symbol          = symbol,
-        custom_sl       = signal_data.get("swing_sl"),
+        signal    = signal_data["signal"],
+        atr_value = entry["atr"],
+        symbol    = symbol,
     )
 
     if execution:
@@ -959,45 +815,8 @@ def scan_symbol(
             "breakeven_done":  False,
             "trail_sl":        execution["stop_loss"],
             "market_snapshot": market_snapshot,
-            "is_pyramid":      is_pyramid,
-            "pyramid_adds":    0,
             "open_epoch":      time.time(),
         }
-        # Track add-on count on the parent position so we don't pyramid twice
-        if is_pyramid and pyramid_pos:
-            parent = _pos_state.get(pyramid_pos["ticket"])
-            if parent is not None:
-                parent["pyramid_adds"] = parent.get("pyramid_adds", 0) + 1
-
-        # ── Trade snapshot image ───────────────────────────────────────────────
-        try:
-            candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
-            snap_df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
-            if not snap_df.empty:
-                bb_df    = _IND["bb"].calculate_bands(snap_df["close"])
-                snap_df  = snap_df.join(bb_df)
-                rsi_vals = _IND["rsi"].calculate_rsi(snap_df).tolist()
-                macd_df  = _IND["macd"].calculate_macd(snap_df)
-                save_trade_snapshot(
-                    symbol      = symbol,
-                    direction   = execution["direction"],
-                    entry_price = execution["entry_price"],
-                    sl          = execution["stop_loss"],
-                    tp          = execution["take_profit"],
-                    signal_data = signal_data,
-                    entry_df    = snap_df,
-                    rsi_values  = rsi_vals,
-                    macd_line   = macd_df["macd"].tolist(),
-                    macd_signal = macd_df["signal"].tolist(),
-                    macd_hist   = macd_df["histogram"].tolist(),
-                    bb_upper    = snap_df["upper"].tolist(),
-                    bb_lower    = snap_df["lower"].tolist(),
-                    bb_mid      = snap_df["middle"].tolist(),
-                    ticket      = execution["ticket"],
-                )
-        except Exception as snap_exc:
-            logger.warning("Snapshot error: %s", snap_exc)
-
     else:
         print(f"  [{symbol}] Order failed — check logs.")
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="FAILED")
@@ -1034,16 +853,6 @@ def _detect_and_notify_closed_positions(
         state = _pos_state.get(ticket, {})
         deal  = deal_map.get(ticket)
 
-        # Fallback: query by position ID directly — catches cases where the
-        # time-range bulk query returned an empty or incomplete deal list.
-        if deal is None:
-            deal = pos_mgr.get_deal_for_position(ticket)
-            if deal is None:
-                logger.warning(
-                    "[close] No deal found for ticket=%d %s — profit/exit_price unavailable.",
-                    ticket, state.get("symbol", ""),
-                )
-
         profit     = float(deal["profit"])           if deal else 0.0
         exit_price = float(deal["exit_price"])       if deal else state.get("entry_price", 0.0)
         close_ts   = float(deal["close_time_epoch"]) if deal else scan_epoch
@@ -1073,27 +882,6 @@ def _detect_and_notify_closed_positions(
             entry_price  = float(state.get("entry_price", 0)),
             exit_price   = exit_price,
         )
-
-        # ── SL-hunt re-entry tracker ───────────────────────────────────────────
-        # If position closed at (or very close to) the SL, flag it for potential
-        # re-entry in case big-money hunted the stop before reversing.
-        initial_sl = state.get("initial_sl")
-        sym        = state.get("symbol")
-        atr        = state.get("atr") or 1.0
-        if initial_sl and sym and profit < 0:
-            sl_distance = abs(exit_price - initial_sl)
-            if sl_distance < atr * 0.5:   # closed within 0.5 ATR of SL = likely a hunt
-                _sl_hunt_tracker[sym] = {
-                    "direction":   state.get("direction"),
-                    "entry_price": state.get("entry_price"),
-                    "sl_price":    initial_sl,
-                    "atr":         atr,
-                    "closed_at":   close_ts,
-                }
-                logger.info(
-                    "[SL-HUNT] %s %s closed near SL (dist=%.2f, atr=%.2f) — watching for reversal",
-                    sym, state.get("direction"), sl_distance, atr,
-                )
 
         # Notify AI engine for RL online update
         if _ai_engine is not None:

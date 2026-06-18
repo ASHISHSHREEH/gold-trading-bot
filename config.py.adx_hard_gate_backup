@@ -57,11 +57,12 @@ RSI_BEAR_MAX = 65   # REAL MONEY: 60
 #       "London":  (7,  16),
 #       "NewYork": (13, 21),
 #   }
-SESSIONS = {"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}
+SESSIONS = {}
 
 # ── Signal Score Threshold ────────────────────────────────────────────────────
-# Default = Phase 3 strict. apply_trading_phase() sets this on every startup.
-MIN_SCORE = 3
+# DATA COLLECTION: 1 — fires on minimal confluence, maximises trade count
+# REAL MONEY:      3 — requires H4+M15+RSI+BB all agreeing
+MIN_SCORE = 1
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
@@ -69,26 +70,16 @@ MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MIN_RR_RATIO   = 2.0
 
-# ── Pyramiding (scaling into winning trades) ───────────────────────────────────
-# If an existing trade is already PYRAMID_MIN_R× in profit, the bot adds a
-# second smaller position in the same direction on the same symbol.
-PYRAMID_ENABLED   = True
-PYRAMID_MIN_R     = 1.0    # existing trade must be >= 1R in profit to pyramid
-PYRAMID_LOT_RATIO = 0.5    # pyramid lot = 50% of a normal-sized trade
-PYRAMID_MAX_ADDS  = 1      # max 1 add-on per original position
-
 # ── Volume Filter ──────────────────────────────────────────────────────────────
 # DATA COLLECTION — 50% still blocks dead bars, but passes most candles
 VOLUME_LOOKBACK  = 20
-VOLUME_MIN_RATIO = 0.8   # Phase 3 strict — apply_trading_phase() sets this
+VOLUME_MIN_RATIO = 0.0   # REAL MONEY: 0.8  (0.0 = disabled for data collection)
 
 # ── ADX Regime Filter ─────────────────────────────────────────────────────────
-# ADX >= ADX_MIN_TREND → trending market → +1 score bonus
-# ADX <  ADX_MIN_TREND → ranging market  → no bonus, but NOT a hard block
-# A strong 3-timeframe signal (H4+H1+M15+RSI+BB) can still fire with low ADX.
-# To restore the old hard block: see main_mt5.py.adx_hard_gate_backup
+# Only open new trades when the market is trending (ADX >= ADX_MIN_TREND).
+# ADX < 20 = ranging/choppy — RSI and MACD signals are unreliable in this regime.
 ADX_PERIOD    = 14
-ADX_MIN_TREND = 20    # threshold for +1 score bonus (was: hard block minimum)
+ADX_MIN_TREND = 20    # minimum ADX to allow new entries
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
@@ -100,16 +91,6 @@ BREAKEVEN_AT_R   = 1.0
 TRAIL_START_AT_R = 1.5
 TRAIL_ATR_MULT   = 0.5
 PARTIAL_TP_RATIO = 0.5
-
-# ── News Filter ────────────────────────────────────────────────────────────────
-# Blocks new entries around scheduled high-impact events (NFP, CPI, etc.)
-# and when ATR spikes abnormally (unscheduled news / surprise data).
-NEWS_FILTER_ENABLED    = True
-NEWS_BUFFER_BEFORE_MIN = 30    # minutes to block BEFORE a known event
-NEWS_BUFFER_AFTER_MIN  = 30    # minutes to block AFTER a known event
-NEWS_ATR_SPIKE_MULT    = 2.0   # block if current ATR > 2× its 20-bar average
-# To add custom blackout windows (e.g. FOMC dates), set in .env:
-#   NEWS_BLACKOUT=FOMC 2026-06-11 19:00, PCE 2026-06-28 13:30
 
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60
@@ -125,20 +106,19 @@ MODE_PHASE1_TRADES = 0     # skip data-collection phase — go straight to stric
 MODE_PHASE2_TRADES = 0     # skip transitional phase — go straight to strict
 
 _PHASE_SETTINGS = {
-    # Phase 1: require 2 real signals — eliminates single-indicator noise trades
-    # that would pollute the ML training set with garbage patterns.
-    # Wide RSI zones and no session/volume filter to still capture variety.
-    1: dict(min_score=2, volume_ratio=0.0, rsi_bull=(35, 62), rsi_bear=(38, 65),
+    # phase: (MIN_SCORE, VOLUME_MIN_RATIO, RSI_BULL_MIN, RSI_BULL_MAX,
+    #          RSI_BEAR_MIN, RSI_BEAR_MAX, h4_hard_gate, sessions_active)
+    1: dict(min_score=1, volume_ratio=0.0, rsi_bull=(35, 60), rsi_bear=(40, 65),
             h4_hard_gate=False, sessions={}),
     2: dict(min_score=2, volume_ratio=0.5, rsi_bull=(38, 58), rsi_bear=(42, 62),
             h4_hard_gate=False, sessions={}),
     3: dict(min_score=3, volume_ratio=0.0, rsi_bull=(40, 55), rsi_bear=(45, 60),
-            h4_hard_gate=False,
+            h4_hard_gate=True,
             sessions={"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}),
 }
 
 # Runtime mutable — updated by apply_trading_phase()
-H4_HARD_GATE = True    # Phase 3 strict — apply_trading_phase() sets this
+H4_HARD_GATE = False   # False = soft (data collection), True = hard block
 
 
 def get_trading_phase(closed_trade_count: int) -> int:

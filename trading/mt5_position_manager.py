@@ -101,8 +101,10 @@ class MT5PositionManager:
             if not atr or atr <= 0:
                 continue
 
-            sl_distance = abs(pos["entry_price"] - pos["sl"]) if pos["sl"] else atr * config.ATR_SL_MULT
-            r_achieved  = pos["profit"] / (sl_distance * pos["volume"] * 100) if sl_distance > 0 else 0
+            sl_distance   = abs(pos["entry_price"] - pos["sl"]) if pos["sl"] else atr * config.ATR_SL_MULT
+            _si           = self.fetcher.get_symbol_info(pos["symbol"])
+            _csize        = (_si.get("contract_size", 100) if _si else 100)
+            r_achieved    = pos["profit"] / (sl_distance * pos["volume"] * _csize) if sl_distance > 0 else 0
 
             # Simpler check: price moved enough from entry
             price_move  = abs(pos["current_price"] - pos["entry_price"])
@@ -229,6 +231,42 @@ class MT5PositionManager:
             })
 
         return results
+
+    def get_deal_for_position(self, position_ticket: int) -> Optional[Dict[str, Any]]:
+        """
+        Fetch the closing deal for a position by position ID — more reliable than a
+        time-range query when the close time is unknown or the bulk scan misses it.
+        """
+        if mt5 is None:
+            return None
+        try:
+            deals = mt5.history_deals_get(position=position_ticket)
+        except Exception as exc:
+            logger.warning("get_deal_for_position(%d): MT5 query failed — %s", position_ticket, exc)
+            return None
+        if not deals:
+            return None
+
+        for d in deals:
+            if d.magic != config.MAGIC:
+                continue
+            if not hasattr(mt5, "DEAL_ENTRY_OUT"):
+                break
+            if d.entry not in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_INOUT):
+                continue
+            direction = "BUY" if d.type == mt5.DEAL_TYPE_BUY else "SELL"
+            return {
+                "ticket":           d.position_id,
+                "deal_ticket":      d.ticket,
+                "symbol":           d.symbol,
+                "direction":        direction,
+                "exit_price":       d.price,
+                "profit":           d.profit,
+                "volume":           d.volume,
+                "close_time_epoch": float(d.time),
+                "comment":          d.comment,
+            }
+        return None
 
     # ── Emergency Flatten ──────────────────────────────────────────────────────
 

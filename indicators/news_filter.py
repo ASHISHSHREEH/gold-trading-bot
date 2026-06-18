@@ -131,6 +131,61 @@ def _parse_custom_blackouts(env_val: str) -> List[Tuple[str, datetime]]:
     return results
 
 
+# ── ForexFactory live calendar ─────────────────────────────────────────────────
+
+_ff_cache: list = []
+_ff_fetched_at: float = 0.0
+_FF_CACHE_TTL = 3600   # refresh once per hour
+
+
+def _fetch_forexfactory_events() -> list:
+    """
+    Fetch this week's high-impact USD events from ForexFactory's public JSON feed.
+    Returns list of (name, datetime_utc) tuples.
+    Silently returns [] on any network/parse error.
+    """
+    global _ff_cache, _ff_fetched_at
+    import time as _time
+
+    if _time.time() - _ff_fetched_at < _FF_CACHE_TTL and _ff_cache:
+        return _ff_cache
+
+    try:
+        from urllib import request as _req
+        url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+        req = _req.Request(url, headers={"User-Agent": "GoldBot/2.0"})
+        with _req.urlopen(req, timeout=5) as resp:
+            import json
+            data = json.loads(resp.read().decode())
+
+        results = []
+        for ev in data:
+            if ev.get("impact") != "High":
+                continue
+            if ev.get("currency") not in ("USD", "JPY"):
+                continue
+            try:
+                dt_str = ev.get("date", "")
+                if not dt_str:
+                    continue
+                from datetime import datetime, timezone
+                dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                results.append((ev.get("title", "High-Impact Event"), dt))
+            except Exception:
+                continue
+
+        _ff_cache      = results
+        _ff_fetched_at = _time.time()
+        logger.info("ForexFactory: loaded %d high-impact events this week", len(results))
+        return results
+
+    except Exception as exc:
+        logger.debug("ForexFactory fetch failed (using hardcoded schedule): %s", exc)
+        return _ff_cache   # return stale cache or []
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def is_news_blackout(
@@ -158,6 +213,9 @@ def is_news_blackout(
         all_events += _event_times_this_month(now.replace(year=now.year + 1, month=1))
     else:
         all_events += _event_times_this_month(now.replace(month=now.month + 1))
+
+    # Live ForexFactory feed (overrides / supplements hardcoded schedule)
+    all_events += _fetch_forexfactory_events()
 
     # Custom blackouts from env
     custom = _parse_custom_blackouts(os.getenv("NEWS_BLACKOUT", ""))
