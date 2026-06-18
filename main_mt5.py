@@ -514,6 +514,15 @@ def generate_signal(
     elif signal == "SELL" and entry.get("swing_high"):
         swing_sl = entry["swing_high"] + sl_buf
 
+    # ── Final MIN_SCORE gate ──────────────────────────────────────────────────
+    # Breakout retest and other late-stage bonuses can flip a NEUTRAL signal.
+    # Re-check the threshold here so no path escapes it.
+    if signal != "NEUTRAL" and score < config.MIN_SCORE:
+        reasons.append(
+            f"Score {score} < MIN_SCORE {config.MIN_SCORE} — downgraded to NEUTRAL"
+        )
+        signal = "NEUTRAL"
+
     confidence = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
 
     return {
@@ -834,18 +843,28 @@ def scan_symbol(
                 (direction == "SELL" and current_price <= entry_price)
             )
             if reversed_back:
-                signal_data["signal"]     = direction
-                signal_data["score"]      = signal_data.get("score", 0) + 2
-                signal_data["confidence"] = "HIGH"
-                signal_data["reasons"].append(
-                    f"RE-ENTRY after SL hunt — price reversed back past entry "
-                    f"({entry_price:.2f}) within {age_mins:.0f} min"
-                )
-                logger.info(
-                    "[RE-ENTRY] %s %s — hunt reversed in %.0f min",
-                    symbol, direction, age_mins,
-                )
-                del _sl_hunt_tracker[symbol]
+                new_score = signal_data.get("score", 0) + 2
+                if new_score >= config.MIN_SCORE:
+                    signal_data["signal"]     = direction
+                    signal_data["score"]      = new_score
+                    signal_data["confidence"] = "HIGH"
+                    signal_data["reasons"].append(
+                        f"RE-ENTRY after SL hunt — price reversed back past entry "
+                        f"({entry_price:.2f}) within {age_mins:.0f} min"
+                    )
+                    logger.info(
+                        "[RE-ENTRY] %s %s — hunt reversed in %.0f min",
+                        symbol, direction, age_mins,
+                    )
+                    del _sl_hunt_tracker[symbol]
+                else:
+                    signal_data["reasons"].append(
+                        f"RE-ENTRY blocked — score {new_score} < MIN_SCORE {config.MIN_SCORE}"
+                    )
+                    logger.info(
+                        "[RE-ENTRY] %s — skipped, score %d < MIN_SCORE %d",
+                        symbol, new_score, config.MIN_SCORE,
+                    )
         else:
             del _sl_hunt_tracker[symbol]   # too old, clear it
 
@@ -1269,20 +1288,40 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
             pass
 
         direction = "BUY" if p.type == 0 else "SELL"
+
+        # Detect whether SL was already moved to breakeven (or better)
+        be_done = False
+        if p.sl:
+            if direction == "BUY":
+                be_done = p.sl >= p.price_open
+            else:  # SELL
+                be_done = p.sl <= p.price_open
+
+        # When SL == entry (breakeven already set), we can't recover initial_sl
+        # from MT5 — estimate it from ATR so risk != 0 and the trail can run.
+        atr_mult = config.SYMBOL_ATR_SL_MULT.get(p.symbol, config.ATR_SL_MULT)
+        if be_done and atr_val:
+            if direction == "BUY":
+                initial_sl = p.price_open - atr_val * atr_mult
+            else:
+                initial_sl = p.price_open + atr_val * atr_mult
+        else:
+            initial_sl = p.sl
+
         _pos_state[p.ticket] = {
-            "symbol":         p.symbol,
-            "direction":      direction,
-            "entry_price":    p.price_open,
-            "initial_sl":     p.sl,
-            "atr":            atr_val or abs(p.price_open - p.sl) if p.sl else None,
-            "partial_done":   False,
-            "breakeven_done": p.sl >= p.price_open if direction == "BUY" and p.sl else False,
-            "trail_sl":       p.sl,
+            "symbol":          p.symbol,
+            "direction":       direction,
+            "entry_price":     p.price_open,
+            "initial_sl":      initial_sl,
+            "atr":             atr_val or (abs(p.price_open - p.sl) if p.sl else None),
+            "partial_done":    be_done,   # if BE done, partial was done too
+            "breakeven_done":  be_done,
+            "trail_sl":        p.sl,
             "market_snapshot": {},
-            "is_pyramid":     False,
-            "pyramid_adds":   0,
-            "reconciled":     True,
-            "open_epoch":     float(p.time),
+            "is_pyramid":      False,
+            "pyramid_adds":    0,
+            "reconciled":      True,
+            "open_epoch":      float(p.time),
         }
         logger.info(
             "Reconcile: ticket=%d %s %s entry=%.2f sl=%.2f atr=%s",
