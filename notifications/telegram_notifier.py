@@ -146,6 +146,10 @@ def alert_news_block(symbol: str, reason: str) -> None:
     )
 
 
+def alert_ai_commentary(symbol: str, commentary: str) -> None:
+    _send(f"🧠 <b>AI Analysis — {symbol}</b>\n{commentary}")
+
+
 def alert_daily_summary(
     balance: float, equity: float, currency: str,
     trades_opened: int, trades_closed: int, net_pnl: float,

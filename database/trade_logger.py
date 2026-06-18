@@ -28,6 +28,7 @@ class TradeLogger:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")   # safe concurrent access
         self._create_tables()
+        self._migrate_schema()
         self._session_id: Optional[int] = None
         logger.info(f"TradeLogger initialised: {db_path}")
 
@@ -67,19 +68,20 @@ class TradeLogger:
             );
 
             CREATE TABLE IF NOT EXISTS signals (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp   DATETIME DEFAULT CURRENT_TIMESTAMP,
-                signal      TEXT,
-                confidence  TEXT,
-                price       REAL,
-                atr         REAL,
-                trend       TEXT,
-                rsi         REAL,
-                macd        TEXT,
-                bb_position TEXT,
-                score       INTEGER,
-                action      TEXT,
-                session_id  INTEGER REFERENCES sessions(id)
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp      DATETIME DEFAULT CURRENT_TIMESTAMP,
+                signal         TEXT,
+                confidence     TEXT,
+                price          REAL,
+                atr            REAL,
+                trend          TEXT,
+                rsi            REAL,
+                macd           TEXT,
+                bb_position    TEXT,
+                score          INTEGER,
+                action         TEXT,
+                candle_pattern TEXT,
+                session_id     INTEGER REFERENCES sessions(id)
             );
 
             CREATE TABLE IF NOT EXISTS learning_features (
@@ -100,6 +102,8 @@ class TradeLogger:
                 atr            REAL,
                 spread         REAL,
                 volume_ratio   REAL,
+                -- Candlestick pattern at entry (CNN training label)
+                candle_pattern TEXT,
                 -- Scoring
                 base_score     INTEGER,
                 session_hour   INTEGER,
@@ -115,6 +119,23 @@ class TradeLogger:
                 FOREIGN KEY(ticket) REFERENCES trades(ticket)
             );
         """)
+        self.conn.commit()
+
+    def _migrate_schema(self):
+        """Add columns introduced after the initial schema (safe on existing DBs)."""
+        migrations = [
+            ("signals",          "candle_pattern TEXT"),
+            ("learning_features", "candle_pattern TEXT"),
+        ]
+        for table, column_def in migrations:
+            col_name = column_def.split()[0]
+            existing = {
+                row[1]
+                for row in self.conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            if col_name not in existing:
+                self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+                logger.info("DB migration: added %s.%s", table, col_name)
         self.conn.commit()
 
     # ── Session Management ─────────────────────────────────────────────────────
@@ -249,8 +270,8 @@ class TradeLogger:
                 """
                 INSERT INTO signals
                   (signal, confidence, price, atr, trend, rsi,
-                   macd, bb_position, score, action, session_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   macd, bb_position, score, action, candle_pattern, session_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     signal_data.get("signal"),
@@ -263,6 +284,7 @@ class TradeLogger:
                     signal_data.get("bb"),
                     signal_data.get("score", 0),
                     action,
+                    signal_data.get("candle_pattern"),
                     self._session_id,
                 ),
             )
@@ -284,9 +306,10 @@ class TradeLogger:
                   (ticket, symbol, direction,
                    htf_trend, h1_trend, m15_trend, m1_direction,
                    rsi, macd_signal, bb_position, atr, spread, volume_ratio,
+                   candle_pattern,
                    base_score, session_hour,
                    ml_score, rl_vote, ai_confidence, ai_decision)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """,
                 (
                     ticket,
@@ -302,6 +325,7 @@ class TradeLogger:
                     features.get("atr"),
                     features.get("spread"),
                     features.get("volume_ratio"),
+                    features.get("candle_pattern"),
                     features.get("base_score"),
                     features.get("session_hour"),
                     features.get("ml_score"),

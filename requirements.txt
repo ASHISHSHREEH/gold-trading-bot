@@ -6,6 +6,12 @@ python-dotenv>=1.0.0
 # MT5 broker connection
 MetaTrader5>=5.0.0
 
+# Candlestick pattern detection
+TA-Lib>=0.4.0
+
+# Claude API — AI trade commentary
+anthropic>=0.50.0
+
 # AI Learning Layer
 scikit-learn>=1.3.0
 joblib>=1.3.0

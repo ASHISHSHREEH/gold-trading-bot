@@ -51,12 +51,15 @@ from indicators.swing_levels      import (
     detect_sl_hunt, detect_breakout_retest,
 )
 from indicators.news_filter       import is_news_blackout, check_atr_spike
+from indicators.candle_patterns   import detect_patterns
 from notifications.telegram_notifier import (
     alert_bot_started, alert_bot_stopped,
     alert_trade_opened, alert_trade_closed,
     alert_drawdown, alert_connection_lost,
     alert_news_block, alert_daily_summary,
+    alert_ai_commentary,
 )
+from notifications.ai_commentary import send_trade_commentary_async
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 os.makedirs("logs", exist_ok=True)
@@ -240,21 +243,25 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     # Breakout + retest detection
     breakout_info = detect_breakout_retest(df, atr=atr_val or 1.0)
 
+    # Candlestick pattern detection on the last closed M5 bar
+    pattern_info = detect_patterns(df)
+
     return {
-        "timeframe":    config.ENTRY_TIMEFRAME,
-        "price":        float(df["close"].iloc[-1]),
-        "timestamp":    df.index[-1],
-        "atr":          atr_val,
-        "rsi":          rsi_val,
-        "bb":           bb_ana,
-        "volume_ok":    volume_ok,
-        "swing_low":    swing_low,
-        "swing_high":   swing_high,
-        "spike":        spike_info,
-        "breakout":     breakout_info,
-        "adx":          adx_info,
-        "spread":       entry_spread(fetcher, symbol),
-        "volume_ratio": (cur_vol / avg_vol) if volume_ok else 0.0,
+        "timeframe":      config.ENTRY_TIMEFRAME,
+        "price":          float(df["close"].iloc[-1]),
+        "timestamp":      df.index[-1],
+        "atr":            atr_val,
+        "rsi":            rsi_val,
+        "bb":             bb_ana,
+        "volume_ok":      volume_ok,
+        "swing_low":      swing_low,
+        "swing_high":     swing_high,
+        "spike":          spike_info,
+        "breakout":       breakout_info,
+        "adx":            adx_info,
+        "candle_pattern": pattern_info,
+        "spread":         entry_spread(fetcher, symbol),
+        "volume_ratio":   (cur_vol / avg_vol) if volume_ok else 0.0,
     }
 
 
@@ -364,13 +371,15 @@ def generate_signal(
         }
 
     # ── ADX regime — score point, not a hard block ───────────────────────────
-    # ADX >= ADX_MIN_TREND: trending market → +1 score bonus
-    # ADX <  ADX_MIN_TREND: ranging market  → no bonus, but signal still allowed
-    #   if the other confluence factors (H4+H1+M15+RSI+BB) reach MIN_SCORE.
-    # To restore the hard block: see main_mt5.py.adx_hard_gate_backup
+    # Strong H4+H1 alignment counts as confirmed trend — ADX check skipped.
+    # Only check the raw ADX value when either timeframe is merely BULL/BEAR.
+    _strong = {"STRONG_BULL", "STRONG_BEAR"}
     adx_info = entry.get("adx", {})
     adx_val  = adx_info.get("adx", 0)
-    if adx_val > 0 and adx_val >= config.ADX_MIN_TREND:
+    if htf_dir in _strong and trend_dir in _strong:
+        score += 1
+        reasons.append(f"H4+H1 both STRONG — ADX bonus awarded (ADX {adx_val:.1f})")
+    elif adx_val > 0 and adx_val >= config.ADX_MIN_TREND:
         score += 1
         reasons.append(f"ADX {adx_val:.1f} ≥ {config.ADX_MIN_TREND} — trending market")
     elif adx_val > 0:
@@ -480,6 +489,20 @@ def generate_signal(
                 score  += 1
                 reasons.append(f"Breakout retest SELL @ {level:.2f} ({bars} bars ago)")
 
+    # ── Candlestick pattern bonus ─────────────────────────────────────────────
+    pattern  = entry.get("candle_pattern") or {}
+    pat_name = pattern.get("name")
+    pat_bias = pattern.get("bias")
+    if pat_name:
+        if (signal == "BUY"  and pat_bias == "BULL") or \
+           (signal == "SELL" and pat_bias == "BEAR"):
+            score += 1
+            reasons.append(f"Candle: {pat_name} confirms {signal} — +1")
+        elif pat_bias == "NEUTRAL":
+            reasons.append(f"Candle: {pat_name} — reversal warning")
+        else:
+            reasons.append(f"Candle: {pat_name} ({pat_bias}) — against signal, no bonus")
+
     # ── Swing-based SL calculation ─────────────────────────────────────────────
     # Place SL just beyond the nearest swing low (BUY) or swing high (SELL)
     # with a small ATR buffer so it sits past the hunt zone
@@ -494,20 +517,21 @@ def generate_signal(
     confidence = "HIGH" if score >= 4 else ("MODERATE" if score >= 2 else "LOW")
 
     return {
-        "signal":     signal,
-        "confidence": confidence,
-        "score":      score,
-        "reasons":    reasons,
-        "htf":        htf_dir,
-        "trend":      trend_dir,
-        "rsi":        rsi,
-        "macd":       confirm["macd"],
-        "bb":         bb["position"],
-        "volume_ok":  entry["volume_ok"],
-        "m1":         timing["direction"],
-        "swing_sl":   swing_sl,
-        "spike":      spike,
-        "breakout":   breakout,
+        "signal":         signal,
+        "confidence":     confidence,
+        "score":          score,
+        "reasons":        reasons,
+        "htf":            htf_dir,
+        "trend":          trend_dir,
+        "rsi":            rsi,
+        "macd":           confirm["macd"],
+        "bb":             bb["position"],
+        "volume_ok":      entry["volume_ok"],
+        "m1":             timing["direction"],
+        "swing_sl":       swing_sl,
+        "spike":          spike,
+        "breakout":       breakout,
+        "candle_pattern": pat_name,
     }
 
 
@@ -921,6 +945,17 @@ def scan_symbol(
             score     = signal_data.get("score", 0),
             reasons   = signal_data.get("reasons", []),
         )
+        send_trade_commentary_async(
+            symbol    = symbol,
+            signal    = signal_data,
+            entry     = entry,
+            htf       = htf,
+            trend     = trend,
+            confirm   = confirm,
+            timing    = timing,
+            execution = execution,
+            callback  = alert_ai_commentary,
+        )
 
         # ── Store ML features for future training ──────────────────────────────
         from datetime import datetime, timezone
@@ -942,7 +977,8 @@ def scan_symbol(
             "ml_score":     ai_decision.ml_score   if ai_decision else None,
             "rl_vote":      ai_decision.rl_vote     if ai_decision else None,
             "ai_confidence": ai_decision.ai_confidence if ai_decision else None,
-            "ai_decision":  ai_decision.decision    if ai_decision else None,
+            "ai_decision":    ai_decision.decision    if ai_decision else None,
+            "candle_pattern": signal_data.get("candle_pattern"),
         }
         logger_db.log_learning_features(execution["ticket"], ml_features)
 
