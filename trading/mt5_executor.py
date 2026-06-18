@@ -68,15 +68,31 @@ class MT5Executor:
         price  = tick["ask"] if is_buy else tick["bid"]
 
         if custom_sl is not None:
-            # Swing-based SL supplied — derive TP to maintain MIN_RR_RATIO
-            sl        = custom_sl
-            sl_dist   = abs(price - sl)
-            tp        = price + sl_dist * config.MIN_RR_RATIO if is_buy else price - sl_dist * config.MIN_RR_RATIO
-            digits    = sym_info["digits"]
-            sl        = round(sl, digits)
-            tp        = round(tp, digits)
+            # Swing-based SL supplied — enforce broker min-dist then derive TP
+            sl      = custom_sl
+            sl_dist = abs(price - sl)
+
+            stops_level = sym_info.get("stops_level", 0)
+            point       = sym_info.get("point", 0.00001)
+            min_dist    = stops_level * point
+            # Many CFD brokers (e.g. FxPro) set stops_level=0 yet still enforce a
+            # minimum.  Fall back to the per-symbol ATR multiplier as a floor.
+            if min_dist == 0:
+                sl_mult  = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
+                min_dist = atr_value * sl_mult
+            if sl_dist < min_dist:
+                logger.debug(
+                    f"[{symbol}] swing SL widened: dist {sl_dist:.4f} → {min_dist:.4f}"
+                )
+                sl      = price - min_dist if is_buy else price + min_dist
+                sl_dist = min_dist
+
+            tp     = price + sl_dist * config.MIN_RR_RATIO if is_buy else price - sl_dist * config.MIN_RR_RATIO
+            digits = sym_info["digits"]
+            sl     = round(sl, digits)
+            tp     = round(tp, digits)
         else:
-            sl, tp = self._calculate_sl_tp(price, atr_value, is_buy, sym_info)
+            sl, tp = self._calculate_sl_tp(price, atr_value, is_buy, sym_info, symbol)
         if sl is None:
             return None
 
@@ -279,8 +295,9 @@ class MT5Executor:
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
-    def _calculate_sl_tp(self, price, atr, is_buy, sym_info):
-        sl = price - atr * config.ATR_SL_MULT if is_buy else price + atr * config.ATR_SL_MULT
+    def _calculate_sl_tp(self, price, atr, is_buy, sym_info, symbol=""):
+        sl_mult = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
+        sl = price - atr * sl_mult if is_buy else price + atr * sl_mult
         tp = price + atr * config.ATR_TP_MULT if is_buy else price - atr * config.ATR_TP_MULT
 
         stops_level = sym_info.get("stops_level", 0)
@@ -368,9 +385,13 @@ class MT5Executor:
         max_lot  = sym_info["max_lot"]
         lots     = round((raw // lot_step) * lot_step, 8)
         if lots < min_lot:
-            # Use broker minimum rather than skipping — accepts higher risk on demo.
-            # ⚠️  REMINDER: Gold at 0.01 lots ≈ 3-4% risk (not 1%). Fix when
-            #     account reaches ~$1,050 USD (≈165,000 JPY) for proper sizing.
+            over_risk = min_lot / raw if raw > 0 else float("inf")
+            if over_risk > config.MAX_LOT_OVER_RISK:
+                logger.warning(
+                    f"Lot {raw:.5f} < min {min_lot} by {over_risk:.1f}× "
+                    f"(MAX_LOT_OVER_RISK={config.MAX_LOT_OVER_RISK}) — skipping trade."
+                )
+                return 0.0
             logger.warning(
                 f"Lot {raw:.5f} < min {min_lot} — using min lot {min_lot} "
                 f"(~{min_lot/raw*100:.0f}% of intended risk, demo only)."

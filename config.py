@@ -95,6 +95,19 @@ ATR_PERIOD  = 14
 ATR_SL_MULT = 1.5
 ATR_TP_MULT = 3.0
 
+# Per-symbol SL multiplier overrides (default: ATR_SL_MULT).
+# NASDAQ (#US100_M26): ATR in index points is large and many CFD brokers report
+# stops_level=0 in symbol info while still enforcing a minimum distance.
+# Using 2.0× gives ~50 pts SL on ATR≈25, which clears FxPro's implicit minimum.
+SYMBOL_ATR_SL_MULT: dict = {
+    "#US100_M26": 2.0,
+}
+
+# Skip trade if min_lot would create more than this factor of intended risk.
+# e.g. 2.0 → skip only when forced min_lot would double the risk (raw < 0.5 × min).
+# Keeps marginal cases (like NASDAQ at ~1.9×) while blocking extreme over-sizing.
+MAX_LOT_OVER_RISK = 2.0
+
 # ── Position Management — Trailing Stop + Partial TP ──────────────────────────
 BREAKEVEN_AT_R   = 1.0
 TRAIL_START_AT_R = 1.5
