@@ -96,19 +96,22 @@ class MT5PositionManager:
             if adds_done >= config.PYRAMID_MAX_ADDS:
                 continue
 
+            # Must be in actual profit — never add to a losing trade
+            if pos["profit"] <= 0:
+                continue
+
             # Need ATR to measure R
             atr = state.get("atr")
             if not atr or atr <= 0:
                 continue
 
-            sl_distance   = abs(pos["entry_price"] - pos["sl"]) if pos["sl"] else atr * config.ATR_SL_MULT
-            _si           = self.fetcher.get_symbol_info(pos["symbol"])
-            _csize        = (_si.get("contract_size", 100) if _si else 100)
-            r_achieved    = pos["profit"] / (sl_distance * pos["volume"] * _csize) if sl_distance > 0 else 0
+            # Price must have moved in our favour (direction-aware, not abs)
+            if pos["direction"] == "BUY":
+                price_move = pos["current_price"] - pos["entry_price"]
+            else:
+                price_move = pos["entry_price"] - pos["current_price"]
 
-            # Simpler check: price moved enough from entry
-            price_move  = abs(pos["current_price"] - pos["entry_price"])
-            r_in_price  = price_move / (atr * config.ATR_SL_MULT) if atr > 0 else 0
+            r_in_price = price_move / (atr * config.ATR_SL_MULT) if atr > 0 else 0
 
             if r_in_price >= config.PYRAMID_MIN_R:
                 return pos
