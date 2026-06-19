@@ -145,6 +145,17 @@ class MT5PositionManager:
             reasons.append(f"Already have an open position in {symbol}")
             can_trade = False
 
+        # Gate 2.5 — per-symbol position cap (applies even on pyramid path)
+        if symbol:
+            sym_max = config.MAX_POSITIONS_PER_SYMBOL.get(symbol)
+            if sym_max is not None:
+                sym_count = self.get_position_count(symbol)
+                if sym_count >= sym_max:
+                    reasons.append(
+                        f"Per-symbol cap reached for {symbol} ({sym_count}/{sym_max})"
+                    )
+                    can_trade = False
+
         if acct:
             # Gate 3 — daily drawdown circuit-breaker
             if self._session_start_balance > 0:

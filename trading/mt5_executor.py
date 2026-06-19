@@ -304,6 +304,12 @@ class MT5Executor:
         point       = sym_info.get("point", 0.00001)
         min_dist    = stops_level * point
 
+        logger.info(
+            f"[{symbol}] stops_level={stops_level} point={point} "
+            f"broker_min_dist={min_dist:.5f} atr={atr:.5f} "
+            f"sl_mult={sl_mult}x computed_sl_dist={abs(price - sl):.5f}"
+        )
+
         if min_dist > 0 and abs(price - sl) < min_dist:
             logger.debug(
                 f"SL distance {abs(price-sl):.5f} < broker min {min_dist:.5f} "

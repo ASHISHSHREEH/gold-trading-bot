@@ -67,6 +67,12 @@ MIN_SCORE = 3
 RISK_PER_TRADE = 0.01
 MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
+MAX_POSITIONS_PER_SYMBOL: dict = {
+    "GOLD":        2,
+    "#Japan225":   2,
+    "#US100_M26":  2,
+    "#USSPX500":   2,
+}
 MIN_RR_RATIO   = 2.0
 
 # ── Pyramiding (scaling into winning trades) ───────────────────────────────────
