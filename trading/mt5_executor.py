@@ -75,15 +75,13 @@ class MT5Executor:
             stops_level = sym_info.get("stops_level", 0)
             point       = sym_info.get("point", 0.00001)
             min_dist    = stops_level * point
-            # Many CFD brokers (e.g. FxPro) set stops_level=0 yet still enforce a
-            # minimum.  Prefer fixed-point floor, then ATR multiplier.
-            if min_dist == 0:
-                fixed_points = config.SYMBOL_FIXED_SL_POINTS.get(symbol)
-                if fixed_points is not None:
-                    min_dist = fixed_points * point
-                else:
-                    sl_mult  = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
-                    min_dist = atr_value * sl_mult
+            # Fixed-point floor takes priority over both stops_level and ATR.
+            fixed_points = config.SYMBOL_FIXED_SL_POINTS.get(symbol)
+            if fixed_points is not None:
+                min_dist = max(min_dist, fixed_points * point)
+            elif min_dist == 0:
+                sl_mult  = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
+                min_dist = atr_value * sl_mult
             if sl_dist < min_dist:
                 logger.debug(
                     f"[{symbol}] swing SL widened: dist {sl_dist:.4f} → {min_dist:.4f}"
