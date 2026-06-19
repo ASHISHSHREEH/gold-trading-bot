@@ -76,10 +76,14 @@ class MT5Executor:
             point       = sym_info.get("point", 0.00001)
             min_dist    = stops_level * point
             # Many CFD brokers (e.g. FxPro) set stops_level=0 yet still enforce a
-            # minimum.  Fall back to the per-symbol ATR multiplier as a floor.
+            # minimum.  Prefer fixed-point floor, then ATR multiplier.
             if min_dist == 0:
-                sl_mult  = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
-                min_dist = atr_value * sl_mult
+                fixed_points = config.SYMBOL_FIXED_SL_POINTS.get(symbol)
+                if fixed_points is not None:
+                    min_dist = fixed_points * point
+                else:
+                    sl_mult  = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
+                    min_dist = atr_value * sl_mult
             if sl_dist < min_dist:
                 logger.debug(
                     f"[{symbol}] swing SL widened: dist {sl_dist:.4f} → {min_dist:.4f}"
@@ -296,29 +300,34 @@ class MT5Executor:
     # ── Internal ───────────────────────────────────────────────────────────────
 
     def _calculate_sl_tp(self, price, atr, is_buy, sym_info, symbol=""):
-        sl_mult = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
-        sl = price - atr * sl_mult if is_buy else price + atr * sl_mult
-        tp = price + atr * config.ATR_TP_MULT if is_buy else price - atr * config.ATR_TP_MULT
-
         stops_level = sym_info.get("stops_level", 0)
         point       = sym_info.get("point", 0.00001)
         min_dist    = stops_level * point
 
-        logger.info(
-            f"[{symbol}] stops_level={stops_level} point={point} "
-            f"broker_min_dist={min_dist:.5f} atr={atr:.5f} "
-            f"sl_mult={sl_mult}x computed_sl_dist={abs(price - sl):.5f}"
-        )
-
-        if min_dist > 0 and abs(price - sl) < min_dist:
-            logger.debug(
-                f"SL distance {abs(price-sl):.5f} < broker min {min_dist:.5f} "
-                f"(stops_level={stops_level}, point={point}) — widening."
+        fixed_points = config.SYMBOL_FIXED_SL_POINTS.get(symbol)
+        if fixed_points is not None:
+            sl_dist = fixed_points * point
+            logger.info(
+                f"[{symbol}] fixed SL: {fixed_points} pts × point={point} "
+                f"= sl_dist={sl_dist:.5f} (stops_level={stops_level})"
             )
-            rr_mult = config.ATR_TP_MULT / config.ATR_SL_MULT
-            sl = price - min_dist if is_buy else price + min_dist
-            tp = price + min_dist * rr_mult if is_buy else price - min_dist * rr_mult
+        else:
+            sl_mult = config.SYMBOL_ATR_SL_MULT.get(symbol, config.ATR_SL_MULT)
+            sl_dist = atr * sl_mult
+            logger.info(
+                f"[{symbol}] stops_level={stops_level} point={point} "
+                f"broker_min_dist={min_dist:.5f} atr={atr:.5f} "
+                f"sl_mult={sl_mult}x computed_sl_dist={sl_dist:.5f}"
+            )
+            if min_dist > 0 and sl_dist < min_dist:
+                logger.debug(
+                    f"SL distance {sl_dist:.5f} < broker min {min_dist:.5f} — widening."
+                )
+                sl_dist = min_dist
 
+        rr_mult = config.ATR_TP_MULT / config.ATR_SL_MULT
+        sl = price - sl_dist if is_buy else price + sl_dist
+        tp = price + sl_dist * rr_mult if is_buy else price - sl_dist * rr_mult
         return sl, tp
 
     def _filling_mode(self, symbol: str) -> int:

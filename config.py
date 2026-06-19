@@ -70,7 +70,7 @@ MAX_POSITIONS  = 4
 MAX_POSITIONS_PER_SYMBOL: dict = {
     "GOLD":        2,
     "#Japan225":   2,
-    "#US100_M26":  2,
+    "#US100_U26":  2,
     "#USSPX500":   2,
 }
 MIN_RR_RATIO   = 2.0
@@ -102,11 +102,15 @@ ATR_SL_MULT = 1.5
 ATR_TP_MULT = 3.0
 
 # Per-symbol SL multiplier overrides (default: ATR_SL_MULT).
-# NASDAQ (#US100_M26): ATR in index points is large and many CFD brokers report
-# stops_level=0 in symbol info while still enforcing a minimum distance.
-# Raised to 3.0× (from 2.0×) because broker still rejects at 2.0×; reset to 2.0 if spread tightens.
 SYMBOL_ATR_SL_MULT: dict = {
-    "#US100_M26": 3.0,
+    "#US100_U26": 3.0,
+}
+
+# Per-symbol fixed SL distance in points (overrides ATR-based SL entirely).
+# Use when the broker enforces a hard minimum that ATR multiples can't reliably clear.
+# 500 points on NASDAQ ≈ 5 index pts at point=0.01, which clears the broker's minimum.
+SYMBOL_FIXED_SL_POINTS: dict = {
+    "#US100_U26": 500,
 }
 
 # Skip trade if min_lot would create more than this factor of intended risk.
