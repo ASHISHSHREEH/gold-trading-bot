@@ -59,9 +59,23 @@ RSI_BEAR_MAX = 65   # REAL MONEY: 60
 #   }
 SESSIONS = {"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}
 
+# Per-symbol session allowlist.  Symbols absent from this dict trade in all
+# active sessions as before.  Symbols listed here are skipped in any session
+# not in their list (e.g. Japan225 is blocked during London).
+SYMBOL_SESSIONS: dict = {
+    "#Japan225": ["Tokyo", "NewYork"],
+}
+
 # ── Signal Score Threshold ────────────────────────────────────────────────────
 # Default = Phase 3 strict. apply_trading_phase() sets this on every startup.
 MIN_SCORE = 3
+
+# Per-symbol minimum score overrides.  Symbols absent from this dict use the
+# global MIN_SCORE set by apply_trading_phase().
+SYMBOL_MIN_SCORE: dict = {
+    "#Japan225": 4,
+    "#USNDAQ100": 4,
+}
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
@@ -69,7 +83,7 @@ MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MAX_POSITIONS_PER_SYMBOL: dict = {
     "GOLD":        2,
-    "#Japan225":   2,
+    "#Japan225":   1,
     "#USNDAQ100":  2,
     "#USSPX500":   2,
 }
@@ -103,6 +117,7 @@ ATR_TP_MULT = 3.0
 
 # Per-symbol SL multiplier overrides (default: ATR_SL_MULT).
 SYMBOL_ATR_SL_MULT: dict = {
+    "#Japan225":  2.5,
     "#USNDAQ100": 3.0,
 }
 

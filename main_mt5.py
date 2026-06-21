@@ -868,6 +868,14 @@ def scan_symbol(
         else:
             del _sl_hunt_tracker[symbol]   # too old, clear it
 
+    # Per-symbol minimum score gate (overrides global MIN_SCORE upward only).
+    sym_min = config.SYMBOL_MIN_SCORE.get(symbol)
+    if sym_min and signal_data["signal"] != "NEUTRAL" and signal_data.get("score", 0) < sym_min:
+        signal_data["reasons"].append(
+            f"Score {signal_data['score']} < SYMBOL_MIN_SCORE {sym_min} for {symbol} — NEUTRAL"
+        )
+        signal_data["signal"] = "NEUTRAL"
+
     display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
 
@@ -1237,6 +1245,12 @@ def run_scan(
         return
 
     for symbol in config.SYMBOLS:
+        # Per-symbol session gate — skip symbols whose allowed-session list
+        # does not include the current session.
+        allowed = config.SYMBOL_SESSIONS.get(symbol)
+        if allowed and session not in allowed:
+            print(f"  [{symbol}] Blocked in {session} session (allowed: {allowed})")
+            continue
         try:
             scan_symbol(symbol, fetcher, executor, pos_mgr, logger_db, session=session)
         except Exception as exc:
