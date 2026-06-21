@@ -1420,9 +1420,16 @@ def main():
 
     # ── Reconcile open positions from MT5 on startup ───────────────────────────
     _reconcile_positions(fetcher)
-    # Clean zombie DB records (trades with no close_time not open in MT5)
+    # Clean zombie DB records (trades with no close_time not open in MT5).
+    # Fetch actual exit_price/profit from MT5 history so ML training has labels.
     open_tickets = list(_pos_state.keys())
-    logger_db.close_zombie_trades(open_tickets)
+    zombie_tickets = logger_db.get_zombie_tickets(open_tickets)
+    ticket_exit_data = {}
+    for ticket in zombie_tickets:
+        deal = pos_mgr.get_deal_for_position(ticket)
+        if deal:
+            ticket_exit_data[ticket] = deal
+    logger_db.close_zombie_trades(open_tickets, ticket_exit_data)
 
     # ── Notify startup ─────────────────────────────────────────────────────────
     alert_bot_started(

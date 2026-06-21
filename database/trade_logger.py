@@ -225,28 +225,65 @@ class TradeLogger:
         except sqlite3.Error as e:
             logger.error(f"log_trade_close failed: {e}")
 
-    def close_zombie_trades(self, open_tickets: list) -> int:
-        """
-        Mark DB trades as closed if they are no longer open in MT5.
-        Called on startup to clean up records from crashed/interrupted sessions.
-        Returns number of records fixed.
-        """
+    def get_zombie_tickets(self, open_tickets: list) -> list:
+        """Return ticket IDs that are unclosed in the DB but no longer open in MT5."""
         try:
             cur = self.conn.execute(
                 "SELECT ticket FROM trades WHERE close_time IS NULL"
             )
             unclosed = [row[0] for row in cur.fetchall()]
-            zombies  = [t for t in unclosed if t not in open_tickets]
+            return [t for t in unclosed if t not in open_tickets]
+        except sqlite3.Error as e:
+            logger.error(f"get_zombie_tickets failed: {e}")
+            return []
+
+    def close_zombie_trades(
+        self,
+        open_tickets: list,
+        ticket_exit_data: dict = None,
+    ) -> int:
+        """
+        Mark DB trades as closed if they are no longer open in MT5.
+        Called on startup to clean up records from crashed/interrupted sessions.
+
+        ticket_exit_data: optional dict mapping ticket → deal dict with keys
+            exit_price, profit, close_time_epoch.  When present, real values are
+            recorded so ML training has valid labels.  Tickets without an entry
+            fall back to NULL exit_price/profit (flagged for manual review).
+
+        Returns number of records fixed.
+        """
+        if ticket_exit_data is None:
+            ticket_exit_data = {}
+        try:
+            zombies = self.get_zombie_tickets(open_tickets)
             for ticket in zombies:
-                self.conn.execute(
-                    """UPDATE trades
-                       SET close_time=?, exit_reason='zombie_cleanup'
-                       WHERE ticket=? AND close_time IS NULL""",
-                    (datetime.now(), ticket),
-                )
+                deal = ticket_exit_data.get(ticket)
+                if deal:
+                    close_dt = datetime.fromtimestamp(deal["close_time_epoch"])
+                    self.conn.execute(
+                        """UPDATE trades
+                           SET close_time=?, exit_price=?, profit=?,
+                               exit_reason='zombie_cleanup'
+                           WHERE ticket=? AND close_time IS NULL""",
+                        (close_dt, deal["exit_price"], deal["profit"], ticket),
+                    )
+                else:
+                    self.conn.execute(
+                        """UPDATE trades
+                           SET close_time=?, exit_reason='zombie_cleanup_no_data'
+                           WHERE ticket=? AND close_time IS NULL""",
+                        (datetime.now(), ticket),
+                    )
             self.conn.commit()
             if zombies:
-                logger.info("Cleaned %d zombie trade record(s): %s", len(zombies), zombies)
+                resolved = [t for t in zombies if t in ticket_exit_data]
+                missing  = [t for t in zombies if t not in ticket_exit_data]
+                logger.info(
+                    "Cleaned %d zombie trade(s): %d with MT5 data %s, "
+                    "%d without %s",
+                    len(zombies), len(resolved), resolved, len(missing), missing,
+                )
             return len(zombies)
         except sqlite3.Error as e:
             logger.error(f"close_zombie_trades failed: {e}")
