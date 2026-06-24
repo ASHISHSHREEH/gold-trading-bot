@@ -827,6 +827,15 @@ def scan_symbol(
 
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
 
+    # ── ADX minimum filter — ranging market gate ───────────────────────────────
+    adx_val = (entry.get("adx") or {}).get("adx", 0)
+    if adx_val < 20 and signal_data["signal"] != "NEUTRAL":
+        signal_data["reasons"].append(
+            f"ADX {adx_val:.1f} < 20 — ranging market, no trade"
+        )
+        signal_data["signal"] = "NEUTRAL"
+        logger.info("[%s] ADX %.1f < 20 — signal downgraded to NEUTRAL", symbol, adx_val)
+
     # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
     import time as _t
     hunt = _sl_hunt_tracker.get(symbol)
@@ -878,6 +887,21 @@ def scan_symbol(
 
     display_symbol_analysis(symbol, signal_data, htf, trend, confirm, entry, timing)
     logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="PENDING")
+
+    # ── Direction lock — block opposite-direction signals per symbol ───────────
+    if signal_data["signal"] != "NEUTRAL":
+        for t_state in _pos_state.values():
+            if t_state.get("symbol") == symbol:
+                existing_dir = t_state.get("direction")
+                if existing_dir and existing_dir != signal_data["signal"]:
+                    print(
+                        f"  GATE: Direction lock — "
+                        f"already have {existing_dir}, blocking {signal_data['signal']}"
+                    )
+                    logger_db.log_signal(
+                        signal_data, entry["price"], entry["atr"], action="BLOCKED"
+                    )
+                    return
 
     # ── Check pyramid eligibility before normal risk gate ─────────────────────
     is_pyramid    = False
