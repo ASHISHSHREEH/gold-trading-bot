@@ -218,7 +218,13 @@ tr:hover td{background:rgba(255,255,255,.016)}
 
 .empty{padding:1.75rem;text-align:center;color:var(--dim);font-size:.8rem}
 footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
+#charts{margin-bottom:.6rem}
+.chart-wrap{background:var(--card);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:.6rem}
+.chart-sym{font-size:.75rem;font-weight:600;color:var(--text)}
+.chart-tv{font-size:.62rem;color:var(--dim);margin-left:.5rem}
+.chart-waiting{padding:2rem;text-align:center;color:var(--dim);font-size:.8rem}
 </style>
+<script src="https://s3.tradingview.com/tv.js"></script>
 </head>
 <body>
 <div id="prog"></div>
@@ -266,6 +272,9 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
 
   <!-- Active symbols -->
   <div class="sym-row" id="syms"></div>
+
+  <!-- Live TradingView charts (one per open symbol) -->
+  <div id="charts"></div>
 
   <!-- Open positions -->
   <div class="card">
@@ -346,6 +355,9 @@ function render(d) {
     ? d.symbols.map(s => `<span class="sym">${esc(s)}</span>`).join('')
     : '<span style="color:#444;font-size:.72rem">No trades recorded yet</span>';
 
+  // Charts
+  renderCharts(d.open_positions);
+
   // Open positions
   $('op-cnt').textContent = d.open_positions.length;
   if (!d.open_positions.length) {
@@ -397,6 +409,62 @@ function render(d) {
         ).join('')
       + '</tbody></table></div>';
   }
+}
+
+// ── TradingView charts ─────────────────────────────────────────────────────────
+const TV_SYMBOLS = {
+  'GOLD':       'OANDA:XAUUSD',
+  '#USSPX500':  'SP:SPX',
+  '#US100_M26': 'NASDAQ:NDX',
+  '#Japan225':  'TVC:NI225',
+};
+let _chartSymKey = null;
+
+function renderCharts(positions) {
+  const syms   = [...new Set(positions.map(p => p.symbol))];
+  const symKey = syms.slice().sort().join(',');
+  if (symKey === _chartSymKey) return;   // symbols unchanged — no flicker
+  _chartSymKey = symKey;
+
+  const el = $('charts');
+
+  if (!syms.length) {
+    el.innerHTML = '<div class="chart-wrap"><div class="chart-waiting">Waiting for signal...</div></div>';
+    return;
+  }
+
+  el.innerHTML = syms.map(sym => {
+    const id   = 'tv_' + sym.replace(/[^a-zA-Z0-9]/g, '_');
+    const tvSym = TV_SYMBOLS[sym] || sym;
+    return `<div class="chart-wrap">
+      <div class="ch">
+        <h2 class="chart-sym">${esc(sym)}</h2>
+        <span class="chart-tv">${esc(tvSym)}&nbsp;&bull;&nbsp;M15</span>
+      </div>
+      <div id="${id}"></div>
+    </div>`;
+  }).join('');
+
+  if (!window.TradingView) return;
+  syms.forEach(sym => {
+    const id    = 'tv_' + sym.replace(/[^a-zA-Z0-9]/g, '_');
+    const tvSym = TV_SYMBOLS[sym] || sym;
+    new TradingView.widget({
+      container_id:        id,
+      symbol:              tvSym,
+      interval:            '15',
+      theme:               'dark',
+      style:               '1',
+      locale:              'en',
+      width:               '100%',
+      height:              400,
+      timezone:            'Etc/UTC',
+      hide_top_toolbar:    false,
+      hide_side_toolbar:   false,
+      enable_publishing:   false,
+      allow_symbol_change: false,
+    });
+  });
 }
 
 function startCountdown() {
