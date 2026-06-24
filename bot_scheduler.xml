@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!--
+  Gold Trading Bot — Windows Task Scheduler definition
+  =====================================================
+  HOW TO IMPORT:
+    Option A (GUI):
+      1. Open Task Scheduler (taskschd.msc)
+      2. Action > Import Task...
+      3. Select this file
+      4. Enter your Windows password when prompted
+      5. Click OK
+
+    Option B (Admin PowerShell — fills in current user automatically):
+      Register-ScheduledTask -Xml (Get-Content "D:\My projects\gold-trading-bot\bot_scheduler.xml" -Raw) `
+        -TaskName "GoldTradingBot" -User "$env:USERDOMAIN\$env:USERNAME" -Password "YOUR_PASSWORD" -Force
+
+  RESTART BEHAVIOUR:
+    - Task Scheduler restarts the bat 60 s after a crash, up to 99 times.
+    - If you stop the bot manually (Ctrl+C or Task Scheduler > End), it does
+      NOT auto-restart — only non-zero exit codes trigger a restart.
+
+  TRIGGER:
+    - Fires 30 seconds after any user logs on (works with RDP and auto-login).
+    - To use BootTrigger instead, replace the <LogonTrigger> block below with:
+        <BootTrigger><Enabled>true</Enabled><Delay>PT60S</Delay></BootTrigger>
+
+  NOTE ON USERNAME:
+    Replace DOMAIN\USERNAME below with your actual Windows login,
+    e.g.  DESKTOP-ABC123\aashs   or just   aashs  for a local account.
+    The import wizard will prompt you to confirm the account.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+
+  <RegistrationInfo>
+    <Date>2026-06-24T00:00:00.0000000</Date>
+    <Author>GoldBot</Author>
+    <Description>Auto-start gold trading bot and dashboard on login. Restarts automatically if the bot crashes.</Description>
+    <URI>\GoldTradingBot</URI>
+  </RegistrationInfo>
+
+  <!-- ── Trigger: 30 s after any user logs on ────────────────────────────── -->
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <Delay>PT30S</Delay>
+    </LogonTrigger>
+  </Triggers>
+
+  <!-- ── Principal: run as the logged-in user at highest available privilege ─ -->
+  <Principals>
+    <Principal id="Author">
+      <UserId>DOMAIN\USERNAME</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+
+  <Settings>
+    <!-- Only one instance at a time -->
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+
+    <!-- Run on laptops whether or not plugged in -->
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+
+    <!-- If the trigger was missed (PC was off), run as soon as possible -->
+    <StartWhenAvailable>true</StartWhenAvailable>
+
+    <!-- No network requirement — bot handles its own MT5 reconnect -->
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+
+    <!-- Never stop the task due to idle or time limit -->
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <WakeToRun>false</WakeToRun>
+
+    <!-- Normal priority — bot doesn't need real-time scheduling -->
+    <Priority>6</Priority>
+
+    <!-- ── Auto-restart on crash ──────────────────────────────────────────── -->
+    <!-- Restarts 60 s after a non-zero exit, up to 99 times.               -->
+    <!-- The bat file exits with the bot's exit code, so a Python crash      -->
+    <!-- (non-zero) triggers a restart; a clean stop (exit 0) does not.      -->
+    <RestartOnFailure>
+      <Interval>PT1M</Interval>
+      <Count>99</Count>
+    </RestartOnFailure>
+  </Settings>
+
+  <!-- ── Action: run the launcher bat ───────────────────────────────────── -->
+  <Actions Context="Author">
+    <Exec>
+      <Command>"D:\My projects\gold-trading-bot\start_bot.bat"</Command>
+      <WorkingDirectory>D:\My projects\gold-trading-bot</WorkingDirectory>
+    </Exec>
+  </Actions>
+
+</Task>
