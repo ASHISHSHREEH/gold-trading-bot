@@ -6,15 +6,29 @@ Usage:
     python dashboard.py
     Open http://localhost:5000 in a browser or phone (use LAN IP on phone)
 """
+import json
 import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string
 
-DB_PATH = Path(__file__).parent / "data" / "trading_mt5.db"
+DB_PATH         = Path(__file__).parent / "data" / "trading_mt5.db"
+LIVE_STATE_PATH = Path(__file__).parent / "data" / "live_state.json"
 
 app = Flask(__name__)
+
+
+# ── Live-state JSON reader ─────────────────────────────────────────────────────
+
+def _read_live_state() -> dict:
+    try:
+        if LIVE_STATE_PATH.exists():
+            with open(LIVE_STATE_PATH) as fh:
+                return json.load(fh)
+    except Exception:
+        pass
+    return {}
 
 
 # ── DB helpers (read-only) ─────────────────────────────────────────────────────
@@ -55,24 +69,17 @@ def _q1(sql, params=()):
 def api_data():
     db_exists = DB_PATH.exists()
 
+    # ── Live data from JSON (written by bot each scan) ─────────────────────────
+    live           = _read_live_state()
+    equity         = live.get("equity", 0)
+    open_positions = live.get("open_positions", [])
+    last_scan_time = live.get("last_scan_time")
+
+    # ── Bot running detection from DB session ──────────────────────────────────
     session     = _q1("SELECT * FROM sessions ORDER BY id DESC LIMIT 1")
     bot_running = bool(session and session.get("end_time") is None)
 
-    # Estimated balance (DB-only; excludes unrealized P&L on open positions)
-    if session:
-        if bot_running:
-            closed_profit = _q1(
-                "SELECT COALESCE(SUM(profit), 0) AS s FROM trades "
-                "WHERE session_id=? AND close_time IS NOT NULL AND profit IS NOT NULL",
-                (session["id"],),
-            ).get("s") or 0
-            balance = (session.get("start_balance") or 0) + closed_profit
-        else:
-            balance = session.get("end_balance") or session.get("start_balance") or 0
-    else:
-        balance = 0
-
-    # All-time closed-trade stats
+    # ── Closed-trade stats from DB ─────────────────────────────────────────────
     st = _q1("""
         SELECT COUNT(*)                                       AS total,
                SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END)  AS wins,
@@ -87,7 +94,7 @@ def api_data():
     win_rate     = round(wins / total * 100, 1) if total else 0.0
     total_profit = st.get("total_profit") or 0
 
-    # Today's P&L
+    # Today's P&L (from DB)
     today = date.today().isoformat()
     daily_pnl = _q1(
         "SELECT COALESCE(SUM(profit), 0) AS d FROM trades "
@@ -95,19 +102,10 @@ def api_data():
         (today,),
     ).get("d") or 0
 
-    # Symbols seen across all trades
+    # Symbols seen across all trades (from DB)
     symbols = [r["symbol"] for r in _q("SELECT DISTINCT symbol FROM trades ORDER BY symbol")]
 
-    # Open positions (DB records with no close_time)
-    open_positions = _q("""
-        SELECT ticket, symbol, direction, open_time,
-               entry_price, volume, stop_loss, take_profit
-          FROM trades
-         WHERE close_time IS NULL
-         ORDER BY open_time DESC
-    """)
-
-    # Last 20 closed trades
+    # Last 20 closed trades (from DB)
     recent_trades = _q("""
         SELECT ticket, symbol, direction, open_time, close_time,
                entry_price, exit_price, profit, exit_reason, rr_ratio
@@ -117,13 +115,11 @@ def api_data():
          LIMIT 20
     """)
 
-    last_signal = _q1("SELECT MAX(timestamp) AS ts FROM signals").get("ts")
-
     return jsonify(
         db_exists      = db_exists,
         bot_running    = bot_running,
         session_start  = session.get("start_time") if session else None,
-        balance        = round(float(balance), 2),
+        balance        = round(float(equity), 2),
         win_rate       = win_rate,
         total_trades   = total,
         winning_trades = wins,
@@ -134,7 +130,7 @@ def api_data():
         symbols        = symbols,
         open_positions = open_positions,
         recent_trades  = recent_trades,
-        last_signal    = last_signal,
+        last_scan_time = last_scan_time,
         refreshed_at   = datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
     )
 
@@ -238,7 +234,7 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
   <!-- Stat cards -->
   <div class="grid4">
     <div class="stat">
-      <div class="lbl">Balance (est.)</div>
+      <div class="lbl">Equity</div>
       <div class="val gld" id="balance">—</div>
       <div class="sub" id="bal-sub">&nbsp;</div>
     </div>
@@ -262,7 +258,7 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
   <!-- Info bar -->
   <div class="info-bar">
     <div class="ii"><div class="il">Session Start</div><div class="iv" id="ss">—</div></div>
-    <div class="ii"><div class="il">Last Signal</div><div class="iv" id="ls">—</div></div>
+    <div class="ii"><div class="il">Last Scan</div><div class="iv" id="ls">—</div></div>
     <div class="ii"><div class="il">Best Trade</div><div class="iv pos" id="bt">—</div></div>
     <div class="ii"><div class="il">Worst Trade</div><div class="iv neg" id="wt">—</div></div>
     <div class="ii"><div class="il">Updated</div><div class="iv" id="ra">—</div></div>
@@ -318,11 +314,9 @@ function render(d) {
   $('dot').className   = 'dot' + (run ? ' pulse' : '');
   $('st').textContent  = run ? 'Running' : 'Stopped';
 
-  // Balance
+  // Balance (equity from live JSON)
   $('balance').textContent = n(d.balance, 0);
-  $('bal-sub').textContent = run
-    ? 'Active session (excl. unrealized)'
-    : 'Last session close';
+  $('bal-sub').textContent = d.balance > 0 ? 'Live equity from MT5' : 'Bot not running';
 
   // Win rate
   const wr = $('wr');
@@ -342,7 +336,7 @@ function render(d) {
 
   // Info bar
   $('ss').textContent = dt(d.session_start);
-  $('ls').textContent = dt(d.last_signal);
+  $('ls').textContent = dt(d.last_scan_time);
   $('bt').textContent = d.best_trade  > 0 ? '+' + n(d.best_trade)  : n(d.best_trade);
   $('wt').textContent = n(d.worst_trade);
   $('ra').textContent = d.refreshed_at;
@@ -359,19 +353,20 @@ function render(d) {
   } else {
     $('op-body').innerHTML =
       '<div class="tw"><table><thead><tr>'
-      + '<th>Ticket</th><th>Symbol</th><th>Dir</th><th>Opened</th>'
-      + '<th>Entry</th><th>Lot</th><th>SL</th><th>TP</th>'
+      + '<th>Ticket</th><th>Symbol</th><th>Dir</th><th>Entry</th>'
+      + '<th>Current</th><th>Lot</th><th>P&amp;L</th><th>SL</th><th>TP</th>'
       + '</tr></thead><tbody>'
       + d.open_positions.map(p =>
           `<tr>
             <td>${p.ticket}</td>
             <td>${esc(p.symbol)}</td>
             <td class="${p.direction === 'BUY' ? 'buy' : 'sell'}">${esc(p.direction)}</td>
-            <td>${dt(p.open_time)}</td>
             <td>${n(p.entry_price, 2)}</td>
+            <td>${n(p.current_price, 2)}</td>
             <td>${n(p.volume, 2)}</td>
-            <td>${n(p.stop_loss, 2)}</td>
-            <td>${n(p.take_profit, 2)}</td>
+            <td class="${pc(p.profit)}">${sign(p.profit)}${n(p.profit, 2)}</td>
+            <td>${n(p.sl, 2)}</td>
+            <td>${n(p.tp, 2)}</td>
           </tr>`
         ).join('')
       + '</tbody></table></div>';

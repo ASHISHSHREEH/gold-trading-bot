@@ -17,6 +17,7 @@ Prerequisites:
     MT5_SYMBOLS=GOLD,#USSPX500,#US100_M26,#Japan225  in .env
 """
 
+import json
 import logging
 import os
 import sys
@@ -92,6 +93,8 @@ _SYMBOL_LABELS = {
     "#US100_M26": "NASDAQ (US)",
     "#Japan225":  "Nikkei (JP)",
 }
+
+_LIVE_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "live_state.json")
 
 # ── Per-position management state ──────────────────────────────────────────────
 # ticket → {symbol, direction, entry_price, initial_sl, atr,
@@ -805,6 +808,34 @@ def display_stats(stats: Dict):
     )
 
 
+def _write_live_state(acct: Optional[Dict], positions: List[Dict]) -> None:
+    """Write current bot state to JSON so the dashboard can read live data."""
+    try:
+        state = {
+            "balance": round(float((acct or {}).get("balance", 0)), 2),
+            "equity":  round(float((acct or {}).get("equity",  0)), 2),
+            "open_positions": [
+                {
+                    "ticket":        int(p["ticket"]),
+                    "symbol":        p["symbol"],
+                    "direction":     p["direction"],
+                    "entry_price":   float(p["entry_price"]),
+                    "current_price": float(p.get("current_price", p["entry_price"])),
+                    "sl":            float(p["sl"]),
+                    "tp":            float(p["tp"]),
+                    "profit":        float(p["profit"]),
+                    "volume":        float(p.get("volume", 0)),
+                }
+                for p in positions
+            ],
+            "last_scan_time": datetime.now(timezone.utc).isoformat(),
+        }
+        with open(_LIVE_STATE_PATH, "w") as fh:
+            json.dump(state, fh)
+    except Exception as exc:
+        logger.warning("live_state write failed: %s", exc)
+
+
 # ── Per-symbol scan ────────────────────────────────────────────────────────────
 
 def scan_symbol(
@@ -1250,6 +1281,7 @@ def run_scan(
 
     positions = pos_mgr.get_open_positions()
     display_positions(positions)
+    _write_live_state(acct, positions)
 
     # Position management runs every cycle regardless of session (Upgrade 4)
     if positions:
