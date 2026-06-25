@@ -856,12 +856,6 @@ def scan_symbol(
         print(f"  [{symbol}] Data unavailable — skipping.")
         return
 
-    # Hard gate: non-GOLD symbols need a clear H4 direction
-    if symbol != "GOLD" and htf["trend"] == "NEUTRAL":
-        logger.info("[%s] H4 NEUTRAL — skipping non-GOLD symbol", symbol)
-        print(f"  [{symbol}] H4 NEUTRAL — skipping non-GOLD symbol")
-        return
-
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
 
     # ── ADX minimum filter — ranging market gate ───────────────────────────────
@@ -1319,15 +1313,6 @@ def run_scan(
         if allowed and session not in allowed:
             print(f"  [{symbol}] Blocked in {session} session (allowed: {allowed})")
             continue
-
-        # Correlation gate: S&P500 and NASDAQ are 95% correlated — never hold both
-        if symbol in ("#USNDAQ100", "#USSPX500"):
-            corr_pair = "#USSPX500" if symbol == "#USNDAQ100" else "#USNDAQ100"
-            if any(p["symbol"] == corr_pair for p in positions):
-                print(
-                    f"  GATE: Correlation block — S&P500/NASDAQ already open"
-                )
-                continue
 
         try:
             scan_symbol(symbol, fetcher, executor, pos_mgr, logger_db, session=session)
