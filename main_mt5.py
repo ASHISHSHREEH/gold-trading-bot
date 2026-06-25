@@ -856,16 +856,23 @@ def scan_symbol(
         print(f"  [{symbol}] Data unavailable — skipping.")
         return
 
+    # Hard gate: non-GOLD symbols need a clear H4 direction
+    if symbol != "GOLD" and htf["trend"] == "NEUTRAL":
+        logger.info("[%s] H4 NEUTRAL — skipping non-GOLD symbol", symbol)
+        print(f"  [{symbol}] H4 NEUTRAL — skipping non-GOLD symbol")
+        return
+
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
 
     # ── ADX minimum filter — ranging market gate ───────────────────────────────
     adx_val = (entry.get("adx") or {}).get("adx", 0)
-    if adx_val < 20 and signal_data["signal"] != "NEUTRAL":
+    sym_adx_min = config.SYMBOL_MIN_ADX.get(symbol, config.ADX_MIN_TREND)
+    if adx_val < sym_adx_min and signal_data["signal"] != "NEUTRAL":
         signal_data["reasons"].append(
-            f"ADX {adx_val:.1f} < 20 — ranging market, no trade"
+            f"ADX {adx_val:.1f} < {sym_adx_min} — ranging market, no trade"
         )
         signal_data["signal"] = "NEUTRAL"
-        logger.info("[%s] ADX %.1f < 20 — signal downgraded to NEUTRAL", symbol, adx_val)
+        logger.info("[%s] ADX %.1f < %d — signal downgraded to NEUTRAL", symbol, adx_val, sym_adx_min)
 
     # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
     import time as _t
@@ -1003,6 +1010,11 @@ def scan_symbol(
                 return
         except Exception as exc:
             logger.error("[%s] AI vote error — proceeding without AI: %s", symbol, exc)
+
+    # Per-symbol risk scaling — non-GOLD symbols use SYMBOL_RISK if defined
+    sym_risk = config.SYMBOL_RISK.get(symbol)
+    if sym_risk is not None:
+        risk_mult *= sym_risk / config.RISK_PER_TRADE
 
     execution = executor.execute_signal(
         signal          = signal_data["signal"],
@@ -1307,6 +1319,16 @@ def run_scan(
         if allowed and session not in allowed:
             print(f"  [{symbol}] Blocked in {session} session (allowed: {allowed})")
             continue
+
+        # Correlation gate: S&P500 and NASDAQ are 95% correlated — never hold both
+        if symbol in ("#USNDAQ100", "#USSPX500"):
+            corr_pair = "#USSPX500" if symbol == "#USNDAQ100" else "#USNDAQ100"
+            if any(p["symbol"] == corr_pair for p in positions):
+                print(
+                    f"  GATE: Correlation block — S&P500/NASDAQ already open"
+                )
+                continue
+
         try:
             scan_symbol(symbol, fetcher, executor, pos_mgr, logger_db, session=session)
         except Exception as exc:

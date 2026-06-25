@@ -75,10 +75,19 @@ MIN_SCORE = 3
 SYMBOL_MIN_SCORE: dict = {
     "#Japan225": 4,
     "#USNDAQ100": 4,
+    "#USSPX500": 4,
 }
 
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
+
+# Per-symbol risk override — non-GOLD at 0.5% to reduce correlated exposure.
+# GOLD stays at RISK_PER_TRADE (1%).  Symbols absent from this dict use RISK_PER_TRADE.
+SYMBOL_RISK: dict = {
+    "#USSPX500": 0.005,
+    "#USNDAQ100": 0.005,
+    "#Japan225": 0.005,
+}
 MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MAX_POSITIONS_PER_SYMBOL: dict = {
@@ -109,6 +118,14 @@ VOLUME_MIN_RATIO = 0.8   # Phase 3 strict — apply_trading_phase() sets this
 # To restore the old hard block: see main_mt5.py.adx_hard_gate_backup
 ADX_PERIOD    = 14
 ADX_MIN_TREND = 20    # threshold for +1 score bonus (was: hard block minimum)
+
+# Per-symbol minimum ADX hard gate — non-GOLD requires stronger trend confirmation.
+# Symbols absent from this dict use ADX_MIN_TREND as the floor.
+SYMBOL_MIN_ADX: dict = {
+    "#USSPX500": 25,
+    "#USNDAQ100": 25,
+    "#Japan225": 25,
+}
 
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
