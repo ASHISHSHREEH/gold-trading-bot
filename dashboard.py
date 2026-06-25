@@ -6,6 +6,7 @@ Usage:
     python dashboard.py
     Open http://localhost:5000 in a browser or phone (use LAN IP on phone)
 """
+import calendar
 import json
 import sqlite3
 from datetime import date, datetime, timezone
@@ -72,6 +73,7 @@ def api_data():
     # ── Live data from JSON (written by bot each scan) ─────────────────────────
     live           = _read_live_state()
     equity         = live.get("equity", 0)
+    balance_val    = live.get("balance", 0)
     open_positions = live.get("open_positions", [])
     last_scan_time = live.get("last_scan_time")
 
@@ -102,6 +104,20 @@ def api_data():
         (today,),
     ).get("d") or 0
 
+    # Monthly P&L calendar (current month, grouped by date)
+    now = datetime.now(timezone.utc)
+    month_start = date(now.year, now.month, 1)
+    month_end   = date(now.year, now.month, calendar.monthrange(now.year, now.month)[1])
+    monthly_rows = _q(
+        "SELECT date(close_time) AS trade_date, COALESCE(SUM(profit),0) AS day_pnl "
+        "FROM trades "
+        "WHERE close_time IS NOT NULL AND profit IS NOT NULL "
+        "AND date(close_time) >= ? AND date(close_time) <= ? "
+        "GROUP BY date(close_time)",
+        (month_start.isoformat(), month_end.isoformat()),
+    )
+    monthly_pnl = {r["trade_date"]: round(float(r["day_pnl"]), 2) for r in monthly_rows}
+
     # Symbols seen across all trades (from DB)
     symbols = [r["symbol"] for r in _q("SELECT DISTINCT symbol FROM trades ORDER BY symbol")]
 
@@ -119,7 +135,8 @@ def api_data():
         db_exists      = db_exists,
         bot_running    = bot_running,
         session_start  = session.get("start_time") if session else None,
-        balance        = round(float(equity), 2),
+        balance        = round(float(balance_val), 2),
+        equity         = round(float(equity), 2),
         win_rate       = win_rate,
         total_trades   = total,
         winning_trades = wins,
@@ -130,6 +147,7 @@ def api_data():
         symbols        = symbols,
         open_positions = open_positions,
         recent_trades  = recent_trades,
+        monthly_pnl    = monthly_pnl,
         last_scan_time = last_scan_time,
         refreshed_at   = datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
     )
@@ -240,8 +258,16 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
   <!-- Stat cards -->
   <div class="grid4">
     <div class="stat">
-      <div class="lbl">Equity</div>
-      <div class="val gld" id="balance">—</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:.5rem">
+        <div>
+          <div class="lbl">Balance</div>
+          <div class="val gld" id="balance">—</div>
+        </div>
+        <div style="text-align:right">
+          <div class="lbl">Equity</div>
+          <div class="val pos" id="equity">—</div>
+        </div>
+      </div>
       <div class="sub" id="bal-sub">&nbsp;</div>
     </div>
     <div class="stat">
@@ -285,13 +311,28 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
     <div id="op-body"><div class="empty">Loading…</div></div>
   </div>
 
+  <!-- Monthly P&L calendar -->
+  <div class="card">
+    <div class="ch">
+      <h2>Monthly P&amp;L &mdash; <span id="cal-month"></span></h2>
+    </div>
+    <div id="cal-body" style="padding:.65rem"></div>
+  </div>
+
   <!-- Recent closed trades -->
   <div class="card">
     <div class="ch">
-      <h2>Recent Trades (last 20)</h2>
+      <h2>Recent Trades</h2>
       <span class="cnt" id="rt-cnt">0</span>
     </div>
     <div id="rt-body"><div class="empty">Loading…</div></div>
+    <div id="rt-toggle" style="display:none;padding:.5rem;text-align:center">
+      <button id="rt-btn" onclick="toggleTrades()"
+        style="background:#1e1e1e;color:var(--gold);border:1px solid rgba(245,166,35,.3);
+               border-radius:6px;padding:.35rem 1rem;font-size:.72rem;cursor:pointer">
+        Show All Trades &#9660;
+      </button>
+    </div>
   </div>
 </main>
 
@@ -301,6 +342,7 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
 const $ = id => document.getElementById(id);
 let tick = 30, timer;
 const bar = $('prog');
+let _tradesExpanded = false;
 
 function n(v, d=2) {
   if (v === null || v === undefined) return '—';
@@ -323,9 +365,10 @@ function render(d) {
   $('dot').className   = 'dot' + (run ? ' pulse' : '');
   $('st').textContent  = run ? 'Running' : 'Stopped';
 
-  // Balance (equity from live JSON)
+  // Balance + Equity (from live JSON)
   $('balance').textContent = n(d.balance, 0);
-  $('bal-sub').textContent = d.balance > 0 ? 'Live equity from MT5' : 'Bot not running';
+  $('equity').textContent  = n(d.equity,  0);
+  $('bal-sub').textContent = d.balance > 0 ? 'Live from MT5' : 'Bot not running';
 
   // Win rate
   const wr = $('wr');
@@ -384,10 +427,14 @@ function render(d) {
       + '</tbody></table></div>';
   }
 
+  // Monthly P&L calendar
+  renderCalendar(d.monthly_pnl || {});
+
   // Recent trades
   $('rt-cnt').textContent = d.recent_trades.length;
   if (!d.recent_trades.length) {
     $('rt-body').innerHTML = '<div class="empty">No closed trades yet</div>';
+    $('rt-toggle').style.display = 'none';
   } else {
     $('rt-body').innerHTML =
       '<div class="tw"><table><thead><tr>'
@@ -408,7 +455,68 @@ function render(d) {
           </tr>`
         ).join('')
       + '</tbody></table></div>';
+    if (d.recent_trades.length > 5) {
+      $('rt-toggle').style.display = '';
+      applyTradeCollapse();
+    } else {
+      $('rt-toggle').style.display = 'none';
+    }
   }
+}
+
+function applyTradeCollapse() {
+  const rows = document.querySelectorAll('#rt-body tbody tr');
+  rows.forEach((r, i) => { r.style.display = (i >= 5 && !_tradesExpanded) ? 'none' : ''; });
+  $('rt-btn').innerHTML = _tradesExpanded ? 'Show Less &#9650;' : 'Show All Trades &#9660;';
+}
+
+function toggleTrades() {
+  _tradesExpanded = !_tradesExpanded;
+  applyTradeCollapse();
+}
+
+function renderCalendar(data) {
+  const now   = new Date();
+  const year  = now.getFullYear();
+  const month = now.getMonth();
+  $('cal-month').textContent = now.toLocaleString('default', {month:'long', year:'numeric'});
+
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const firstDay    = new Date(year, month, 1).getDay();
+
+  let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:.6rem">';
+  ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => {
+    html += `<div style="text-align:center;color:var(--dim);padding:.2rem 0;font-weight:600">${d}</div>`;
+  });
+  for (let i = 0; i < firstDay; i++) html += '<div></div>';
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const mo      = String(month + 1).padStart(2, '0');
+    const dy      = String(day).padStart(2, '0');
+    const key     = `${year}-${mo}-${dy}`;
+    const pnl     = data[key];
+    const isToday = day === now.getDate();
+
+    let bg = '#1a1a1a', clr = '#444', amt = '';
+    if (pnl !== undefined) {
+      if (pnl > 0) {
+        bg  = 'rgba(34,197,94,.15)'; clr = '#22c55e';
+        amt = '+¥' + Math.round(pnl).toLocaleString();
+      } else if (pnl < 0) {
+        bg  = 'rgba(239,68,68,.15)'; clr = '#ef4444';
+        amt = '-¥' + Math.abs(Math.round(pnl)).toLocaleString();
+      } else {
+        clr = '#666'; amt = '¥0';
+      }
+    }
+    const border = isToday ? 'border:1px solid var(--gold)' : 'border:1px solid transparent';
+    html += `<div style="background:${bg};border-radius:4px;padding:.25rem .15rem;text-align:center;min-height:40px;${border}">
+      <div style="color:var(--dim);font-size:.55rem">${day}</div>
+      <div style="color:${clr};font-size:.58rem;margin-top:.1rem;line-height:1.2;word-break:break-all">${amt}</div>
+    </div>`;
+  }
+  html += '</div>';
+  $('cal-body').innerHTML = html;
 }
 
 // ── TradingView charts ─────────────────────────────────────────────────────────
