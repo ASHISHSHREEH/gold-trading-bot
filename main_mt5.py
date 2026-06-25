@@ -868,6 +868,18 @@ def scan_symbol(
         signal_data["signal"] = "NEUTRAL"
         logger.info("[%s] ADX %.1f < %d — signal downgraded to NEUTRAL", symbol, adx_val, sym_adx_min)
 
+    # ── M15 confirmation gate — block trades diverging against strong M15 trend ─
+    m15_trend = confirm.get("ma_trend", "NEUTRAL")
+    sig = signal_data["signal"]
+    if sig == "SELL" and m15_trend == "STRONG_BULL":
+        signal_data["signal"] = "NEUTRAL"
+        signal_data["reasons"].append("M15 STRONG_BULL diverging — waiting for pullback before selling")
+        logger.info("[%s] M15 STRONG_BULL diverging — waiting for pullback before selling", symbol)
+    elif sig == "BUY" and m15_trend == "STRONG_BEAR":
+        signal_data["signal"] = "NEUTRAL"
+        signal_data["reasons"].append("M15 STRONG_BEAR diverging — waiting for pullback before buying")
+        logger.info("[%s] M15 STRONG_BEAR diverging — waiting for pullback before buying", symbol)
+
     # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
     import time as _t
     hunt = _sl_hunt_tracker.get(symbol)
