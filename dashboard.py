@@ -76,6 +76,7 @@ def api_data():
     balance_val    = live.get("balance", 0)
     open_positions = live.get("open_positions", [])
     last_scan_time = live.get("last_scan_time")
+    mt5_connected  = live.get("mt5_connected", False)
 
     # ── Bot running detection from DB session ──────────────────────────────────
     session     = _q1("SELECT * FROM sessions ORDER BY id DESC LIMIT 1")
@@ -103,6 +104,33 @@ def api_data():
         "WHERE date(close_time) = ? AND profit IS NOT NULL",
         (today,),
     ).get("d") or 0
+
+    # Today's detailed trade stats
+    today_st    = _q1(
+        "SELECT COUNT(*) AS today_count, "
+        "MAX(profit) AS best_today, MIN(profit) AS worst_today "
+        "FROM trades WHERE date(close_time) = ? AND profit IS NOT NULL",
+        (today,),
+    )
+    today_count = today_st.get("today_count") or 0
+    best_today  = round(float(today_st.get("best_today") or 0), 2)
+    worst_today = round(float(today_st.get("worst_today") or 0), 2)
+
+    # Win rate per symbol
+    sym_stats = _q("""
+        SELECT symbol,
+               COUNT(*) AS total,
+               SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) AS wins
+          FROM trades
+         WHERE close_time IS NOT NULL AND profit IS NOT NULL
+         GROUP BY symbol ORDER BY symbol
+    """)
+    win_rate_by_symbol = [
+        {"symbol": r["symbol"], "total": r["total"] or 0,
+         "wins": r["wins"] or 0,
+         "win_rate": round((r["wins"] or 0) / r["total"] * 100, 1) if r["total"] else 0.0}
+        for r in sym_stats
+    ]
 
     # Monthly P&L calendar (current month, grouped by date)
     now = datetime.now(timezone.utc)
@@ -145,11 +173,16 @@ def api_data():
         best_trade     = round(float(st.get("best_trade") or 0), 2),
         worst_trade    = round(float(st.get("worst_trade") or 0), 2),
         symbols        = symbols,
-        open_positions = open_positions,
-        recent_trades  = recent_trades,
-        monthly_pnl    = monthly_pnl,
-        last_scan_time = last_scan_time,
-        refreshed_at   = datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
+        open_positions     = open_positions,
+        recent_trades      = recent_trades,
+        monthly_pnl        = monthly_pnl,
+        last_scan_time     = last_scan_time,
+        mt5_connected      = mt5_connected,
+        today_count        = today_count,
+        best_today         = best_today,
+        worst_today        = worst_today,
+        win_rate_by_symbol = win_rate_by_symbol,
+        refreshed_at       = datetime.now(timezone.utc).strftime("%H:%M:%S UTC"),
     )
 
 
@@ -176,6 +209,23 @@ header{
   background:#111;border-bottom:1px solid var(--border);
   padding:.75rem 1rem;display:flex;align-items:center;
   justify-content:space-between;position:sticky;top:0;z-index:99
+}
+#scan-warn{
+  display:none;background:rgba(239,68,68,.1);
+  border-bottom:1px solid rgba(239,68,68,.25);
+  color:#ef4444;padding:.5rem 1rem;
+  font-size:.78rem;font-weight:600;text-align:center
+}
+.risk-bg{height:5px;background:#252525;border-radius:3px;overflow:hidden;margin-top:.4rem}
+#risk-bar{height:100%;width:0%;background:var(--green);transition:width .4s,background .4s}
+#risk-label{font-size:.58rem;color:var(--dim);margin-top:.2rem}
+.wr-sym-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:.5rem;padding:.65rem}
+@media(min-width:580px){.wr-sym-grid{grid-template-columns:repeat(4,1fr)}}
+.wr-sym-cell{background:#1a1a1a;border:1px solid var(--border);border-radius:6px;padding:.6rem .8rem}
+#countdown-pill{
+  display:inline-block;background:rgba(245,166,35,.1);
+  border:1px solid rgba(245,166,35,.2);color:var(--gold);
+  padding:.12rem .5rem;border-radius:100px;font-size:.66rem;font-weight:600
 }
 header h1{font-size:.95rem;font-weight:700;color:var(--gold);letter-spacing:.4px}
 .badge{
@@ -248,11 +298,18 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
 <div id="prog"></div>
 <header>
   <h1>Trading Bot Dashboard</h1>
-  <div id="badge" class="badge stop">
-    <div id="dot" class="dot"></div>
-    <span id="st">Loading</span>
+  <div style="display:flex;gap:.5rem;align-items:center">
+    <div id="badge" class="badge stop">
+      <div id="dot" class="dot"></div>
+      <span id="st">Loading</span>
+    </div>
+    <div id="mt5-badge" class="badge stop">
+      <div id="mt5-dot" class="dot"></div>
+      <span id="mt5-st">MT5: —</span>
+    </div>
   </div>
 </header>
+<div id="scan-warn"></div>
 
 <main>
   <!-- Stat cards -->
@@ -279,6 +336,8 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
       <div class="lbl">Daily P&amp;L</div>
       <div class="val" id="dpnl">—</div>
       <div class="sub">Today UTC</div>
+      <div class="risk-bg"><div id="risk-bar"></div></div>
+      <div id="risk-label">Daily Risk: 0%</div>
     </div>
     <div class="stat">
       <div class="lbl">Total Profit</div>
@@ -293,6 +352,9 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
     <div class="ii"><div class="il">Last Scan</div><div class="iv" id="ls">—</div></div>
     <div class="ii"><div class="il">Best Trade</div><div class="iv pos" id="bt">—</div></div>
     <div class="ii"><div class="il">Worst Trade</div><div class="iv neg" id="wt">—</div></div>
+    <div class="ii"><div class="il">Today Trades</div><div class="iv" id="today-cnt">—</div></div>
+    <div class="ii"><div class="il">Best Today</div><div class="iv pos" id="best-today">—</div></div>
+    <div class="ii"><div class="il">Worst Today</div><div class="iv neg" id="worst-today">—</div></div>
     <div class="ii"><div class="il">Updated</div><div class="iv" id="ra">—</div></div>
   </div>
 
@@ -319,6 +381,12 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
     <div id="cal-body" style="padding:.65rem"></div>
   </div>
 
+  <!-- Win Rate by Symbol -->
+  <div class="card">
+    <div class="ch"><h2>Win Rate by Symbol</h2></div>
+    <div id="wr-sym-body"><div class="empty">Loading…</div></div>
+  </div>
+
   <!-- Recent closed trades -->
   <div class="card">
     <div class="ch">
@@ -336,7 +404,7 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
   </div>
 </main>
 
-<footer id="foot">Auto-refreshes every 30 seconds &middot; Read-only</footer>
+<footer id="foot"><span id="countdown-pill">&#9203; 30s</span> &nbsp;Auto-refresh &middot; Read-only</footer>
 
 <script>
 const $ = id => document.getElementById(id);
@@ -365,6 +433,26 @@ function render(d) {
   $('dot').className   = 'dot' + (run ? ' pulse' : '');
   $('st').textContent  = run ? 'Running' : 'Stopped';
 
+  // MT5 connection badge
+  const mt5 = d.mt5_connected;
+  $('mt5-badge').className = 'badge ' + (mt5 ? 'run' : 'stop');
+  $('mt5-dot').className   = 'dot' + (mt5 ? ' pulse' : '');
+  $('mt5-st').textContent  = mt5 ? 'MT5: Connected' : 'MT5: Disconnected';
+
+  // Scan age warning (> 10 min)
+  const warn = $('scan-warn');
+  if (d.last_scan_time) {
+    const minsAgo = (Date.now() - new Date(d.last_scan_time).getTime()) / 60000;
+    if (minsAgo > 10) {
+      warn.style.display = '';
+      warn.textContent = '⚠️ Bot may be stuck! Last scan was ' + Math.round(minsAgo) + ' minutes ago';
+    } else {
+      warn.style.display = 'none';
+    }
+  } else {
+    warn.style.display = 'none';
+  }
+
   // Balance + Equity (from live JSON)
   $('balance').textContent = n(d.balance, 0);
   $('equity').textContent  = n(d.equity,  0);
@@ -381,6 +469,18 @@ function render(d) {
   dp.textContent = sign(d.daily_pnl) + n(d.daily_pnl);
   dp.className   = 'val ' + pc(d.daily_pnl);
 
+  // Daily risk progress bar (3% of balance)
+  if (d.balance > 0) {
+    const maxLoss = d.balance * 0.03;
+    const loss    = Math.max(0, -d.daily_pnl);
+    const pct     = Math.min(100, loss / maxLoss * 100);
+    const bar     = $('risk-bar');
+    bar.style.width      = pct.toFixed(1) + '%';
+    bar.style.background = pct >= 80 ? 'var(--red)' : pct >= 50 ? '#f59e0b' : 'var(--green)';
+    $('risk-label').textContent = 'Daily Risk: ' + pct.toFixed(1) + '% of 3% limit used';
+    $('risk-label').style.color = pct >= 80 ? 'var(--red)' : pct >= 50 ? '#f59e0b' : 'var(--dim)';
+  }
+
   // Total profit
   const tp = $('tpnl');
   tp.textContent = sign(d.total_profit) + n(d.total_profit);
@@ -391,7 +491,13 @@ function render(d) {
   $('ls').textContent = dt(d.last_scan_time);
   $('bt').textContent = d.best_trade  > 0 ? '+' + n(d.best_trade)  : n(d.best_trade);
   $('wt').textContent = n(d.worst_trade);
+  $('today-cnt').textContent   = (d.today_count || 0) + ' trades';
+  $('best-today').textContent  = d.best_today  > 0 ? '+' + n(d.best_today)  : n(d.best_today);
+  $('worst-today').textContent = d.worst_today < 0 ? n(d.worst_today) : n(d.worst_today);
   $('ra').textContent = d.refreshed_at;
+
+  // Win rate by symbol
+  renderSymWR(d.win_rate_by_symbol || []);
 
   // Symbols
   $('syms').innerHTML = d.symbols.length
@@ -473,6 +579,28 @@ function applyTradeCollapse() {
 function toggleTrades() {
   _tradesExpanded = !_tradesExpanded;
   applyTradeCollapse();
+}
+
+const SYM_NAMES = {
+  'GOLD':'GOLD','#USSPX500':'S&amp;P500','#US100_M26':'NASDAQ','#Japan225':'Japan225'
+};
+function renderSymWR(data) {
+  if (!data.length) {
+    $('wr-sym-body').innerHTML = '<div class="empty">No trades recorded yet</div>';
+    return;
+  }
+  $('wr-sym-body').innerHTML =
+    '<div class="wr-sym-grid">'
+    + data.map(s => {
+        const name = SYM_NAMES[s.symbol] || esc(s.symbol);
+        const clr  = s.win_rate >= 40 ? 'var(--green)' : s.win_rate < 30 ? 'var(--red)' : 'var(--gold)';
+        return `<div class="wr-sym-cell">
+          <div style="font-size:.6rem;text-transform:uppercase;letter-spacing:.7px;color:var(--dim)">${name}</div>
+          <div style="font-size:1.3rem;font-weight:700;color:${clr};margin:.25rem 0">${s.win_rate}%</div>
+          <div style="font-size:.6rem;color:var(--dim)">${s.wins}W / ${s.total}T</div>
+        </div>`;
+      }).join('')
+    + '</div>';
 }
 
 function renderCalendar(data) {
@@ -586,7 +714,7 @@ function startCountdown() {
   }));
   timer = setInterval(() => {
     tick--;
-    $('foot').textContent = `Refreshing in ${tick}s · Read-only`;
+    $('countdown-pill').textContent = '⏱ ' + tick + 's';
     if (tick <= 0) { clearInterval(timer); load(); }
   }, 1000);
 }
@@ -597,7 +725,7 @@ function load() {
     .then(d => {
       if (!d.db_exists) {
         $('st').textContent = 'No DB';
-        $('foot').textContent = 'Database not found — start the bot first.';
+        $('countdown-pill').textContent = 'No DB';
         return;
       }
       render(d);
@@ -605,7 +733,7 @@ function load() {
     })
     .catch(() => {
       $('st').textContent = 'Error';
-      $('foot').textContent = 'Failed to reach server — retrying in 30s';
+      $('countdown-pill').textContent = 'Error — retry 30s';
       setTimeout(load, 30000);
     });
 }

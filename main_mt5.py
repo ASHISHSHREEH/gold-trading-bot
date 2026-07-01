@@ -828,6 +828,7 @@ def _write_live_state(acct: Optional[Dict], positions: List[Dict]) -> None:
                 }
                 for p in positions
             ],
+            "mt5_connected":  True,
             "last_scan_time": datetime.now(timezone.utc).isoformat(),
         }
         with open(_LIVE_STATE_PATH, "w") as fh:
