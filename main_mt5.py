@@ -761,7 +761,8 @@ def display_symbol_analysis(
         f"MACD={timing['macd']}  RSI={m1_rsi}"
     )
     print(
-        f"  {icon}  |  Score: {signal_data['score']}/5  |  "
+        f"  {icon}  |  REGIME: {signal_data.get('regime', 'N/A')}  |  "
+        f"Score: {signal_data['score']}/5  |  "
         f"{signal_data['confidence']}  |  "
         f"{'; '.join(signal_data['reasons'])}"
     )
@@ -839,6 +840,21 @@ def _write_live_state(acct: Optional[Dict], positions: List[Dict]) -> None:
 
 # ── Per-symbol scan ────────────────────────────────────────────────────────────
 
+def get_regime(htf: Dict, adx_val: float) -> str:
+    """Layer 1: H4 trend + ADX -> allowed direction.
+    Returns 'SELL_ONLY', 'BUY_ONLY', or 'FLAT'."""
+    if not config.REGIME_ENABLED:
+        return "ANY"
+    if adx_val < config.REGIME_ADX_MIN:
+        return "FLAT"
+    t = htf.get("trend", "NEUTRAL")
+    if t in ("STRONG_BEAR", "BEAR"):
+        return "SELL_ONLY"
+    if t in ("STRONG_BULL", "BULL"):
+        return "BUY_ONLY"
+    return "FLAT"
+
+
 def scan_symbol(
     symbol:    str,
     fetcher:   MT5DataFetcher,
@@ -859,15 +875,34 @@ def scan_symbol(
 
     signal_data = generate_signal(htf, trend, confirm, entry, timing)
 
-    # ── ADX minimum filter — ranging market gate ───────────────────────────────
-    adx_val = (entry.get("adx") or {}).get("adx", 0)
-    sym_adx_min = config.SYMBOL_MIN_ADX.get(symbol, config.ADX_MIN_TREND)
-    if adx_val < sym_adx_min and signal_data["signal"] != "NEUTRAL":
-        signal_data["reasons"].append(
-            f"ADX {adx_val:.1f} < {sym_adx_min} — ranging market, no trade"
+    # ── Layer 1: Regime gate ───────────────────────────────────────────────────
+    adx_val_regime = (entry.get("adx") or {}).get("adx", 0)
+    regime = get_regime(htf, adx_val_regime)
+    sig = signal_data["signal"]
+    if sig != "NEUTRAL":
+        blocked_by_regime = (
+            regime == "FLAT"
+            or (regime == "SELL_ONLY" and sig == "BUY")
+            or (regime == "BUY_ONLY" and sig == "SELL")
         )
-        signal_data["signal"] = "NEUTRAL"
-        logger.info("[%s] ADX %.1f < %d — signal downgraded to NEUTRAL", symbol, adx_val, sym_adx_min)
+        if blocked_by_regime:
+            signal_data["reasons"].append(
+                f"REGIME {regime} blocks {sig}")
+            signal_data["signal"] = "NEUTRAL"
+            logger.info("[%s] REGIME %s blocks %s (H4=%s ADX=%.1f)",
+                symbol, regime, sig, htf.get("trend"), adx_val_regime)
+    signal_data["regime"] = regime
+
+    # ── ADX minimum filter — ranging market gate ───────────────────────────────
+    # [pre-regime] superseded by regime gate above (FLAT covers ADX < REGIME_ADX_MIN)
+    # adx_val = (entry.get("adx") or {}).get("adx", 0)  # [pre-regime]
+    # sym_adx_min = config.SYMBOL_MIN_ADX.get(symbol, config.ADX_MIN_TREND)  # [pre-regime]
+    # if adx_val < sym_adx_min and signal_data["signal"] != "NEUTRAL":  # [pre-regime]
+    #     signal_data["reasons"].append(  # [pre-regime]
+    #         f"ADX {adx_val:.1f} < {sym_adx_min} — ranging market, no trade"  # [pre-regime]
+    #     )  # [pre-regime]
+    #     signal_data["signal"] = "NEUTRAL"  # [pre-regime]
+    #     logger.info("[%s] ADX %.1f < %d — signal downgraded to NEUTRAL", symbol, adx_val, sym_adx_min)  # [pre-regime]
 
     # ── Re-entry check: override NEUTRAL if this symbol was recently SL-hunted ─
     import time as _t

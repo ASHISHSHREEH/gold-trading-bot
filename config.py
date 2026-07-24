@@ -127,6 +127,10 @@ SYMBOL_MIN_ADX: dict = {
     "#Japan225": 25,
 }
 
+# ── Layer 1: Regime detection ─────────────────────────────────────────────────
+REGIME_ENABLED = True
+REGIME_ADX_MIN = 20     # below this = FLAT (no trades)
+
 # ── ATR Stop Architecture ──────────────────────────────────────────────────────
 ATR_PERIOD  = 14
 ATR_SL_MULT = 1.5
