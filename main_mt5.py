@@ -94,13 +94,34 @@ _SYMBOL_LABELS = {
     "#Japan225":  "Nikkei (JP)",
 }
 
-_LIVE_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "live_state.json")
+_LIVE_STATE_PATH  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "live_state.json")
+_POS_STATE_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "pos_state.json")
 
 # ── Per-position management state ──────────────────────────────────────────────
 # ticket → {symbol, direction, entry_price, initial_sl, atr,
 #           partial_done, breakeven_done, trail_sl,
 #           market_snapshot (for RL update on close)}
 _pos_state: Dict[int, Dict[str, Any]] = {}
+
+
+def _save_pos_state() -> None:
+    """Persist _pos_state to disk so restarts retain exact flags and initial_sl."""
+    try:
+        import json as _json
+        with open(_POS_STATE_PATH, "w", encoding="utf-8") as _fh:
+            _json.dump({str(k): v for k, v in _pos_state.items()}, _fh, default=str)
+    except Exception as _exc:
+        logger.warning("_save_pos_state failed: %s", _exc)
+
+
+def _load_pos_state() -> Dict[int, Any]:
+    """Load saved pos_state from disk; returns {} on any error."""
+    try:
+        import json as _json
+        with open(_POS_STATE_PATH, encoding="utf-8") as _fh:
+            return {int(k): v for k, v in _json.load(_fh).items()}
+    except Exception:
+        return {}
 
 # Re-entry tracker: symbol → {direction, sl_price, entry_price, atr, closed_at_epoch}
 # Populated when a position closes at SL; enables re-entry if price immediately reverses
@@ -587,6 +608,7 @@ def manage_open_positions(
                 f"[{symbol}] Tracking ticket={ticket} {direction} "
                 f"@ {entry} SL={cur_sl}"
             )
+            _save_pos_state()
 
         state = _pos_state[ticket]
 
@@ -616,6 +638,7 @@ def manage_open_positions(
                     f"[{symbol}] ticket={ticket} partial close "
                     f"{config.PARTIAL_TP_RATIO:.0%} at {r:.2f}R"
                 )
+                _save_pos_state()
 
         # ── 1R: move SL to breakeven (Upgrade 4) ──────────────────────────────
         if r >= config.BREAKEVEN_AT_R and not state["breakeven_done"]:
@@ -631,6 +654,7 @@ def manage_open_positions(
                 logger.info(
                     f"[{symbol}] ticket={ticket} SL → breakeven {be_sl:.5f}"
                 )
+                _save_pos_state()
 
         # ── 1.5R+: trailing stop (Upgrade 4) ──────────────────────────────────
         if r >= config.TRAIL_START_AT_R and live_atr:
@@ -645,6 +669,7 @@ def manage_open_positions(
                             f"[{symbol}] ticket={ticket} trail SL → "
                             f"{new_trail:.5f} (R={r:.2f})"
                         )
+                        _save_pos_state()
             else:  # SELL
                 new_trail = current + trail_dist
                 if new_trail < state["trail_sl"]:
@@ -654,12 +679,14 @@ def manage_open_positions(
                             f"[{symbol}] ticket={ticket} trail SL → "
                             f"{new_trail:.5f} (R={r:.2f})"
                         )
+                        _save_pos_state()
 
     # Purge state for positions that are no longer open
     open_tickets = {p["ticket"] for p in positions}
     for ticket in [t for t in list(_pos_state) if t not in open_tickets]:
         logger.info(f"Position ticket={ticket} closed — removing state.")
         del _pos_state[ticket]
+        _save_pos_state()
 
 
 # ── Display helpers ────────────────────────────────────────────────────────────
@@ -962,9 +989,13 @@ def scan_symbol(
             if t_state.get("symbol") == symbol:
                 existing_dir = t_state.get("direction")
                 if existing_dir and existing_dir != signal_data["signal"]:
-                    print(
-                        f"  GATE: Direction lock — "
-                        f"already have {existing_dir}, blocking {signal_data['signal']}"
+                    # print(  # [pre-fix] GATE went to stdout only
+                    #     f"  GATE: Direction lock — "
+                    #     f"already have {existing_dir}, blocking {signal_data['signal']}"
+                    # )  # [pre-fix]
+                    logger.info(
+                        "GATE [%s]: Direction lock — already have %s, blocking %s",
+                        symbol, existing_dir, signal_data["signal"],
                     )
                     logger_db.log_signal(
                         signal_data, entry["price"], entry["atr"], action="BLOCKED"
@@ -992,7 +1023,8 @@ def scan_symbol(
     # Normal risk gate — skipped for duplicate-symbol check on pyramid path
     risk = pos_mgr.check_risk_limits(symbol=symbol, allow_pyramid=is_pyramid)
     if not risk["can_open_new"]:
-        print(f"  GATE: {'; '.join(risk['reasons'])}")
+        # print(f"  GATE: {'; '.join(risk['reasons'])}")  # [pre-fix] stdout only
+        logger.info("GATE [%s]: %s", symbol, "; ".join(risk["reasons"]))
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="BLOCKED")
         return
 
@@ -1133,6 +1165,7 @@ def scan_symbol(
             parent = _pos_state.get(pyramid_pos["ticket"])
             if parent is not None:
                 parent["pyramid_adds"] = parent.get("pyramid_adds", 0) + 1
+        _save_pos_state()
 
         # ── Trade snapshot image ───────────────────────────────────────────────
         try:
@@ -1218,11 +1251,14 @@ def _detect_and_notify_closed_positions(
             ticket, state.get("symbol"), state.get("direction"), profit,
         )
 
+        # Remove from state first — a DB exception in log_trade_close must not
+        # leave a ghost direction lock for the rest of this bot run (Fix B).
+        del _pos_state[ticket]
+        _save_pos_state()
+        # [pre-fix] del was placed AFTER log_trade_close, risking permanent stale entry
+
         # Update TradeLogger close record
         logger_db.log_trade_close(ticket, exit_price, profit, reason="detected")
-
-        # Remove from state BEFORE any further processing to prevent ghost re-fires
-        del _pos_state[ticket]
         alert_trade_closed(
             symbol    = state.get("symbol", ""),
             direction = state.get("direction", ""),
@@ -1364,9 +1400,12 @@ def run_scan(
 def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
     """
     On startup, rebuild _pos_state from any MT5 positions already open.
-    Estimates ATR from current M5 data so trailing stop + partial TP work correctly.
+    Prefers saved pos_state.json for exact flags; falls back to ATR estimation.
     """
     existing = pos_mgr_global.get_open_positions() if False else []
+
+    # Load previously saved state — exact initial_sl, partial/breakeven flags, trail_sl
+    saved = _load_pos_state()
 
     try:
         import MetaTrader5 as mt5
@@ -1383,6 +1422,7 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
 
     if not raw:
         logger.info("Reconcile: no pre-existing positions found.")
+        _save_pos_state()   # clears any stale saved entries
         return
 
     logger.info("Reconcile: found %d pre-existing position(s) — rebuilding state.", len(raw))
@@ -1391,6 +1431,22 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
         if p.ticket in _pos_state:
             continue
 
+        # ── Restore from saved state (exact flags + initial_sl) ──────────────
+        if p.ticket in saved:
+            restored = dict(saved[p.ticket])
+            restored["reconciled"] = True
+            _pos_state[p.ticket] = restored
+            logger.info(
+                "Reconcile: ticket=%d %s %s restored from saved state "
+                "(initial_sl=%s partial=%s be=%s)",
+                p.ticket, restored.get("symbol", p.symbol),
+                restored.get("direction", "?"),
+                restored.get("initial_sl"), restored.get("partial_done"),
+                restored.get("breakeven_done"),
+            )
+            continue
+
+        # ── Fall back to ATR estimation for tickets not in saved state ────────
         # Estimate ATR from current M5 data
         atr_val = None
         try:
@@ -1441,6 +1497,10 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
             p.ticket, p.symbol, direction, p.price_open, p.sl,
             f"{atr_val:.2f}" if atr_val else "estimated",
         )
+
+    # Remove stale saved entries (closed while bot was down) by overwriting
+    # the file with only the tickets now in _pos_state.
+    _save_pos_state()
 
 
 # ── Entry Point ────────────────────────────────────────────────────────────────
@@ -1532,6 +1592,8 @@ def main():
     )
 
     # ── Reconcile open positions from MT5 on startup ───────────────────────────
+    # Snapshot saved state BEFORE reconcile wipes stale entries — zombie learning needs it
+    saved_pos_state = _load_pos_state()
     _reconcile_positions(fetcher)
     # Clean zombie DB records (trades with no close_time not open in MT5).
     # Fetch actual exit_price/profit from MT5 history so ML training has labels.
@@ -1543,6 +1605,29 @@ def main():
         if deal:
             ticket_exit_data[ticket] = deal
     logger_db.close_zombie_trades(open_tickets, ticket_exit_data)
+
+    # Feed zombie closes into the learning tables if saved state has their entry data
+    for ticket in zombie_tickets:
+        if ticket not in ticket_exit_data:
+            continue
+        saved_state = saved_pos_state.get(ticket, {})
+        if not saved_state:
+            continue
+        try:
+            deal = ticket_exit_data[ticket]
+            logger_db.update_learning_outcome(
+                ticket      = ticket,
+                profit      = float(deal["profit"]),
+                entry_price = float(saved_state.get("entry_price", deal["exit_price"])),
+                exit_price  = float(deal["exit_price"]),
+            )
+            logger.info(
+                "Zombie learning: ticket=%d entry=%.2f exit=%.2f profit=%.2f",
+                ticket, saved_state.get("entry_price", 0),
+                deal["exit_price"], deal["profit"],
+            )
+        except Exception as _exc:
+            logger.warning("Zombie learning failed for ticket=%d: %s", ticket, _exc)
 
     # ── Notify startup ─────────────────────────────────────────────────────────
     alert_bot_started(

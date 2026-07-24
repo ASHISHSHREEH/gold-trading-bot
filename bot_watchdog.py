@@ -43,8 +43,11 @@ def _find_python() -> str:
 
 def _stream(proc: subprocess.Popen) -> None:
     """Daemon thread: copy proc stdout → our stdout line by line."""
-    for raw in iter(proc.stdout.readline, b""):
-        sys.stdout.write(raw.decode(errors="replace"))
+    # sentinel is "" (str) because Popen runs in text mode (Fix D)
+    # for raw in iter(proc.stdout.readline, b""):          # [pre-fix] binary mode
+    #     sys.stdout.write(raw.decode(errors="replace"))   # [pre-fix]
+    for line in iter(proc.stdout.readline, ""):
+        sys.stdout.write(line)
         sys.stdout.flush()
 
 
@@ -69,6 +72,8 @@ def _launch(python: str) -> subprocess.Popen:
         [python, str(SCRIPT)],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        encoding="utf-8",       # Fix D: text mode — arrows/dashes render correctly
+        errors="replace",
         cwd=str(BASE_DIR),
     )
     threading.Thread(target=_stream, args=(proc,), daemon=True).start()
