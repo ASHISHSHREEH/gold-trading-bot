@@ -12,10 +12,14 @@ import sqlite3
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
-DB_PATH         = Path(__file__).parent / "data" / "trading_mt5.db"
-LIVE_STATE_PATH = Path(__file__).parent / "data" / "live_state.json"
+DB_PATH           = Path(__file__).parent / "data" / "trading_mt5.db"
+LIVE_STATE_PATH   = Path(__file__).parent / "data" / "live_state.json"
+RESTART_FLAG_PATH = Path(__file__).parent / "data" / "restart_request.flag"
+
+# ── Remote-restart token — CHANGE THIS before deploying ───────────────────────
+RESTART_TOKEN = "changeme123"
 
 app = Flask(__name__)
 
@@ -186,6 +190,15 @@ def api_data():
     )
 
 
+@app.route("/api/restart", methods=["POST"])
+def api_restart():
+    data = request.get_json(silent=True) or {}
+    if data.get("token") != RESTART_TOKEN:
+        return jsonify(ok=False, error="forbidden"), 403
+    RESTART_FLAG_PATH.touch()
+    return jsonify(ok=True)
+
+
 # ── HTML ───────────────────────────────────────────────────────────────────────
 
 HTML = r"""<!DOCTYPE html>
@@ -307,6 +320,14 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
       <div id="mt5-dot" class="dot"></div>
       <span id="mt5-st">MT5: —</span>
     </div>
+    <button onclick="restartBot()"
+      style="background:transparent;color:var(--red);
+             border:1px solid var(--red);border-radius:100px;
+             font-size:.66rem;font-weight:600;text-transform:uppercase;
+             letter-spacing:.5px;padding:.22rem .7rem;cursor:pointer;opacity:.6"
+      onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.6">
+      Restart Bot
+    </button>
   </div>
 </header>
 <div id="scan-warn"></div>
@@ -736,6 +757,19 @@ function load() {
       $('countdown-pill').textContent = 'Error — retry 30s';
       setTimeout(load, 30000);
     });
+}
+
+function restartBot() {
+  const token = prompt('Enter restart token:');
+  if (!token) return;
+  fetch('/api/restart', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({token})
+  })
+  .then(r => r.json())
+  .then(d => alert(d.ok ? 'Restart signal sent. Bot will cycle within ~5 s.' : ('Error: ' + (d.error || 'unknown'))))
+  .catch(() => alert('Request failed — is the dashboard reachable?'));
 }
 
 load();
