@@ -78,6 +78,10 @@ SYMBOL_MIN_SCORE: dict = {
     "#USSPX500": 4,
 }
 
+# ── Per-Symbol Session Circuit Breaker ────────────────────────────────────────
+SYMBOL_MAX_TRADES_PER_SESSION: dict = {"#USSPX500": 5}
+SYMBOL_MAX_LOSSES_PER_SESSION: dict = {"#USSPX500": 3}
+
 # ── Risk Parameters ────────────────────────────────────────────────────────────
 RISK_PER_TRADE = 0.01
 
@@ -169,6 +173,9 @@ NEWS_BUFFER_AFTER_MIN  = 30    # minutes to block AFTER a known event
 NEWS_ATR_SPIKE_MULT    = 2.0   # block if current ATR > 2× its 20-bar average
 # To add custom blackout windows (e.g. FOMC dates), set in .env:
 #   NEWS_BLACKOUT=FOMC 2026-06-11 19:00, PCE 2026-06-28 13:30
+
+# ── AI Layer ───────────────────────────────────────────────────────────────────
+AI_VETO_ENABLED = False   # AI logs its opinion but cannot block trades
 
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60

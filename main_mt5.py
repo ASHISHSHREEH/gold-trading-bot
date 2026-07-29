@@ -127,6 +127,11 @@ def _load_pos_state() -> Dict[int, Any]:
 # Populated when a position closes at SL; enables re-entry if price immediately reverses
 _sl_hunt_tracker: Dict[str, Dict[str, Any]] = {}
 
+# Session circuit-breaker counters — reset at midnight UTC
+_symbol_session_trades: Dict[str, int] = {}
+_symbol_session_losses: Dict[str, int] = {}
+_session_reset_date = None
+
 # ── AI Learning Engine (singleton, initialised in main()) ──────────────────────
 _ai_engine: Optional[LearningEngine] = None
 
@@ -867,6 +872,16 @@ def _write_live_state(acct: Optional[Dict], positions: List[Dict]) -> None:
 
 # ── Per-symbol scan ────────────────────────────────────────────────────────────
 
+def _check_session_reset():
+    global _session_reset_date
+    today = datetime.now(timezone.utc).date()
+    if _session_reset_date != today:
+        _symbol_session_trades.clear()
+        _symbol_session_losses.clear()
+        _session_reset_date = today
+        logger.info("Session counters reset for new day")
+
+
 def get_regime(htf: Dict, adx_val: float) -> str:
     """Layer 1: H4 trend + ADX -> allowed direction.
     Returns 'SELL_ONLY', 'BUY_ONLY', or 'FLAT'."""
@@ -919,6 +934,20 @@ def scan_symbol(
             logger.info("[%s] REGIME %s blocks %s (H4=%s ADX=%.1f)",
                 symbol, regime, sig, htf.get("trend"), adx_val_regime)
     signal_data["regime"] = regime
+
+    # ── S&P500 session circuit breaker ────────────────────────────────────────
+    _check_session_reset()
+    max_trades   = config.SYMBOL_MAX_TRADES_PER_SESSION.get(symbol)
+    max_losses   = config.SYMBOL_MAX_LOSSES_PER_SESSION.get(symbol)
+    trades_today = _symbol_session_trades.get(symbol, 0)
+    losses_today = _symbol_session_losses.get(symbol, 0)
+    if signal_data["signal"] != "NEUTRAL":
+        if max_trades and trades_today >= max_trades:
+            logger.info("[%s] Max %d trades today — skipping", symbol, max_trades)
+            signal_data["signal"] = "NEUTRAL"
+        elif max_losses and losses_today >= max_losses:
+            logger.info("[%s] %d losses today — stopped until tomorrow", symbol, max_losses)
+            signal_data["signal"] = "NEUTRAL"
 
     # ── ADX minimum filter — ranging market gate ───────────────────────────────
     # [pre-regime] superseded by regime gate above (FLAT covers ADX < REGIME_ADX_MIN)
@@ -1068,8 +1097,14 @@ def scan_symbol(
             )
             display_ai_decision(ai_decision)
             if ai_decision.decision == "NEUTRAL":
-                logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="AI_VETO")
-                return
+                if config.AI_VETO_ENABLED:
+                    logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="AI_VETO")
+                    return
+                else:
+                    logger.info("[%s] AI would veto (ml=%.2f rl=%s) — observer mode, proceeding",
+                        symbol, ai_decision.ml_score or 0, ai_decision.rl_vote)
+                    # [pre-AI-observer] logger_db.log_signal(..., action="AI_VETO"); return
+                    logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="AI_VETO_IGNORED")
         except Exception as exc:
             logger.error("[%s] AI vote error — proceeding without AI: %s", symbol, exc)
 
@@ -1090,6 +1125,7 @@ def scan_symbol(
         display_execution(symbol, execution)
         logger_db.log_trade_open(execution)
         logger_db.log_signal(signal_data, entry["price"], entry["atr"], action="EXECUTED")
+        _symbol_session_trades[symbol] = _symbol_session_trades.get(symbol, 0) + 1
         alert_trade_opened(
             symbol    = symbol,
             direction = execution["direction"],
@@ -1281,6 +1317,11 @@ def _detect_and_notify_closed_positions(
         initial_sl = state.get("initial_sl")
         sym        = state.get("symbol")
         atr        = state.get("atr") or 1.0
+
+        # Circuit-breaker: count session losses per symbol
+        if sym and profit < 0:
+            _symbol_session_losses[sym] = _symbol_session_losses.get(sym, 0) + 1
+
         if initial_sl and sym and profit < 0:
             sl_distance = abs(exit_price - initial_sl)
             if sl_distance < atr * 0.5:   # closed within 0.5 ATR of SL = likely a hunt
