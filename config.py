@@ -175,7 +175,7 @@ NEWS_ATR_SPIKE_MULT    = 2.0   # block if current ATR > 2× its 20-bar average
 #   NEWS_BLACKOUT=FOMC 2026-06-11 19:00, PCE 2026-06-28 13:30
 
 # ── AI Layer ───────────────────────────────────────────────────────────────────
-AI_VETO_ENABLED = False   # AI logs its opinion but cannot block trades
+AI_VETO_ENABLED = True    # veto re-enabled 2026-07-30 — 6/6 overridden vetoes lost
 
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60
