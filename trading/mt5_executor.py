@@ -428,6 +428,35 @@ class MT5Executor:
                     f"[{symbol}] Retryable {result.retcode} "
                     f"(attempt {attempt}/{max_retries}). Retry in {delay:.0f}s..."
                 )
+                # [pre-dupfix] retried blind on TIMEOUT/CONNECTION — broker may have
+                # already filled the order before the response was lost.
+                _ambiguous = frozenset(filter(None, (
+                    getattr(mt5, "TRADE_RETCODE_TIMEOUT",    None),
+                    getattr(mt5, "TRADE_RETCODE_CONNECTION", None),
+                )))
+                if result.retcode in _ambiguous:
+                    # Primary: MT5 sets result.order to the broker-assigned ticket on
+                    # TIMEOUT when the order was accepted before the response was lost.
+                    if result.order:
+                        existing = mt5.positions_get(ticket=result.order)
+                        if existing:
+                            logger.warning(
+                                f"[{symbol}] ticket={result.order} confirmed open after "
+                                f"retcode={result.retcode} — returning as DONE, no retry"
+                            )
+                            return result
+                    # Secondary: scan all our-magic positions for this symbol.
+                    sym_positions = mt5.positions_get(symbol=symbol) or []
+                    our_magic     = [p for p in sym_positions if p.magic == config.MAGIC]
+                    if our_magic:
+                        logger.error(
+                            f"[{symbol}] retcode={result.retcode} but "
+                            f"{len(our_magic)} position(s) already open "
+                            f"(tickets={[p.ticket for p in our_magic]}) — "
+                            f"aborting retry to prevent duplicate. "
+                            f"Position will be reconciled next scan."
+                        )
+                        return None  # [pre-dupfix] would have retried here → double-fill
                 tick = self.fetcher.get_current_tick(symbol)
                 if tick and "price" in request:
                     d = self.fetcher.get_symbol_info(symbol).get("digits", 5)
