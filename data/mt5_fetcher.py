@@ -4,6 +4,7 @@ Supports multiple symbols; every data method accepts an explicit symbol
 argument so the bot can trade GOLD, indices, and FX from one session.
 """
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -121,7 +122,25 @@ class MT5DataFetcher:
         """Return OHLCV DataFrame for the given symbol (defaults to primary)."""
         sym = symbol or config.SYMBOL
         tf  = _tf_const(timeframe_str)
-        rates = mt5.copy_rates_from_pos(sym, tf, 0, count)
+
+        # [pre-retryfix] rates = mt5.copy_rates_from_pos(sym, tf, 0, count)
+        # [pre-retryfix] if rates is None or len(rates) == 0:
+        # [pre-retryfix]     logger.error(f"No data for {sym} {timeframe_str}: {mt5.last_error()}")
+        # [pre-retryfix]     return pd.DataFrame()
+        max_attempts = 3
+        rates = None
+        for attempt in range(1, max_attempts + 1):
+            rates = mt5.copy_rates_from_pos(sym, tf, 0, count)
+            if rates is not None and len(rates) > 0:
+                break
+            if attempt < max_attempts:
+                logger.warning(
+                    f"[{sym}] {timeframe_str} history empty "
+                    f"(attempt {attempt}/{max_attempts}), retrying after symbol_select... "
+                    f"last_error={mt5.last_error()}"
+                )
+                mt5.symbol_select(sym, True)
+                time.sleep(2)
 
         if rates is None or len(rates) == 0:
             logger.error(f"No data for {sym} {timeframe_str}: {mt5.last_error()}")
