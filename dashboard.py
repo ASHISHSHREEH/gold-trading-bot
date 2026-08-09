@@ -136,19 +136,27 @@ def api_data():
         for r in sym_stats
     ]
 
-    # Monthly P&L calendar (current month, grouped by date)
-    now = datetime.now(timezone.utc)
-    month_start = date(now.year, now.month, 1)
-    month_end   = date(now.year, now.month, calendar.monthrange(now.year, now.month)[1])
+    # Monthly P&L calendar — all months so the client can navigate without refetch
+    # [pre-monthnav] now = datetime.now(timezone.utc)
+    # [pre-monthnav] month_start = date(now.year, now.month, 1)
+    # [pre-monthnav] month_end   = date(now.year, now.month, calendar.monthrange(now.year, now.month)[1])
+    # [pre-monthnav] monthly_rows = _q(
+    # [pre-monthnav]     "SELECT date(close_time) AS trade_date, COALESCE(SUM(profit),0) AS day_pnl "
+    # [pre-monthnav]     "FROM trades "
+    # [pre-monthnav]     "WHERE close_time IS NOT NULL AND profit IS NOT NULL "
+    # [pre-monthnav]     "AND date(close_time) >= ? AND date(close_time) <= ? "
+    # [pre-monthnav]     "GROUP BY date(close_time)",
+    # [pre-monthnav]     (month_start.isoformat(), month_end.isoformat()),
+    # [pre-monthnav] )
+    # [pre-monthnav] monthly_pnl = {r["trade_date"]: round(float(r["day_pnl"]), 2) for r in monthly_rows}
     monthly_rows = _q(
         "SELECT date(close_time) AS trade_date, COALESCE(SUM(profit),0) AS day_pnl "
-        "FROM trades "
-        "WHERE close_time IS NOT NULL AND profit IS NOT NULL "
-        "AND date(close_time) >= ? AND date(close_time) <= ? "
-        "GROUP BY date(close_time)",
-        (month_start.isoformat(), month_end.isoformat()),
+        "  FROM trades "
+        " WHERE close_time IS NOT NULL AND profit IS NOT NULL "
+        " GROUP BY date(close_time)"
     )
-    monthly_pnl = {r["trade_date"]: round(float(r["day_pnl"]), 2) for r in monthly_rows}
+    monthly_pnl     = {r["trade_date"]: round(float(r["day_pnl"]), 2) for r in monthly_rows}
+    months_with_data = sorted({d[:7] for d in monthly_pnl})
 
     # Symbols seen across all trades (from DB)
     symbols = [r["symbol"] for r in _q("SELECT DISTINCT symbol FROM trades ORDER BY symbol")]
@@ -180,6 +188,7 @@ def api_data():
         open_positions     = open_positions,
         recent_trades      = recent_trades,
         monthly_pnl        = monthly_pnl,
+        months_with_data   = months_with_data,
         last_scan_time     = last_scan_time,
         mt5_connected      = mt5_connected,
         today_count        = today_count,
@@ -395,11 +404,25 @@ footer{text-align:center;color:var(--dim);font-size:.66rem;padding:.5rem 1rem}
   </div>
 
   <!-- Monthly P&L calendar -->
+  <!-- [pre-monthnav] <h2>Monthly P&amp;L &mdash; <span id="cal-month"></span></h2> -->
   <div class="card">
     <div class="ch">
-      <h2>Monthly P&amp;L &mdash; <span id="cal-month"></span></h2>
+      <h2>Monthly P&amp;L</h2>
+      <div style="display:flex;align-items:center;gap:.5rem">
+        <button id="cal-prev" onclick="calStep(-1)"
+          style="background:#1e1e1e;color:var(--gold);border:1px solid rgba(245,166,35,.3);
+                 border-radius:6px;padding:.25rem .65rem;font-size:.88rem;cursor:pointer;opacity:.9"
+          onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.9">&#8249;</button>
+        <span id="cal-month"
+          style="font-size:.72rem;color:var(--text);min-width:9rem;text-align:center"></span>
+        <button id="cal-next" onclick="calStep(1)"
+          style="background:#1e1e1e;color:var(--gold);border:1px solid rgba(245,166,35,.3);
+                 border-radius:6px;padding:.25rem .65rem;font-size:.88rem;cursor:pointer;opacity:.9"
+          onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=.9">&#8250;</button>
+      </div>
     </div>
     <div id="cal-body" style="padding:.65rem"></div>
+    <div id="cal-total" style="padding:.3rem .65rem .65rem;text-align:right;font-size:.72rem"></div>
   </div>
 
   <!-- Win Rate by Symbol -->
@@ -432,6 +455,19 @@ const $ = id => document.getElementById(id);
 let tick = 30, timer;
 const bar = $('prog');
 let _tradesExpanded = false;
+
+// [pre-monthnav] renderCalendar had no navigation state — used new Date() internally
+let _calYear   = new Date().getFullYear();
+let _calMonth  = new Date().getMonth();   // 0-indexed, matches JS Date convention
+let _calData   = {};
+let _calMonths = [];   // sorted "YYYY-MM" strings that have at least one trade
+
+function calStep(delta) {
+  _calMonth += delta;
+  if (_calMonth > 11) { _calMonth = 0; _calYear++; }
+  if (_calMonth < 0)  { _calMonth = 11; _calYear--; }
+  renderCalendar(_calData, _calYear, _calMonth);
+}
 
 function n(v, d=2) {
   if (v === null || v === undefined) return '—';
@@ -554,8 +590,11 @@ function render(d) {
       + '</tbody></table></div>';
   }
 
-  // Monthly P&L calendar
-  renderCalendar(d.monthly_pnl || {});
+  // Monthly P&L calendar — cache data; preserve user's chosen month across refreshes
+  // [pre-monthnav] renderCalendar(d.monthly_pnl || {});
+  _calData   = d.monthly_pnl   || {};
+  _calMonths = d.months_with_data || [];
+  renderCalendar(_calData, _calYear, _calMonth);
 
   // Recent trades
   $('rt-cnt').textContent = d.recent_trades.length;
@@ -624,14 +663,28 @@ function renderSymWR(data) {
     + '</div>';
 }
 
-function renderCalendar(data) {
-  const now   = new Date();
-  const year  = now.getFullYear();
-  const month = now.getMonth();
-  $('cal-month').textContent = now.toLocaleString('default', {month:'long', year:'numeric'});
+// [pre-monthnav] function renderCalendar(data) — no year/month params, used new Date() internally
+function renderCalendar(data, year, month) {
+  // [pre-monthnav] const now   = new Date();
+  // [pre-monthnav] const year  = now.getFullYear();
+  // [pre-monthnav] const month = now.getMonth();
+  // [pre-monthnav] $('cal-month').textContent = now.toLocaleString('default', {month:'long', year:'numeric'});
+  $('cal-month').textContent =
+    new Date(year, month, 1).toLocaleString('default', {month:'long', year:'numeric'});
 
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDay    = new Date(year, month, 1).getDay();
+
+  // Prev/next button state
+  const ym = String(year) + '-' + String(month + 1).padStart(2, '0');
+  const tod = new Date();
+  const isCurrentMonth = year === tod.getFullYear() && month === tod.getMonth();
+  const earliest = _calMonths.length ? _calMonths[0] : ym;
+  const atEarliest = ym <= earliest;
+  $('cal-prev').disabled    = atEarliest;
+  $('cal-prev').style.opacity = atEarliest ? '.3' : '.9';
+  $('cal-next').disabled    = isCurrentMonth;
+  $('cal-next').style.opacity = isCurrentMonth ? '.3' : '.9';
 
   let html = '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;font-size:.6rem">';
   ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => {
@@ -639,12 +692,16 @@ function renderCalendar(data) {
   });
   for (let i = 0; i < firstDay; i++) html += '<div></div>';
 
+  let monthTotal = 0;
   for (let day = 1; day <= daysInMonth; day++) {
     const mo      = String(month + 1).padStart(2, '0');
     const dy      = String(day).padStart(2, '0');
     const key     = `${year}-${mo}-${dy}`;
     const pnl     = data[key];
-    const isToday = day === now.getDate();
+    // [pre-monthnav] const isToday = day === now.getDate();
+    const isToday = isCurrentMonth && day === tod.getDate();
+
+    if (pnl !== undefined) monthTotal += pnl;
 
     let bg = '#1a1a1a', clr = '#444', amt = '';
     if (pnl !== undefined) {
@@ -666,6 +723,17 @@ function renderCalendar(data) {
   }
   html += '</div>';
   $('cal-body').innerHTML = html;
+
+  // Monthly total line
+  const totalEl = $('cal-total');
+  if (monthTotal !== 0) {
+    const sign = monthTotal > 0 ? '+' : '';
+    totalEl.textContent = 'Month total: ' + sign + '¥' + Math.round(Math.abs(monthTotal)).toLocaleString();
+    totalEl.style.color = monthTotal > 0 ? 'var(--green)' : 'var(--red)';
+    if (monthTotal < 0) totalEl.textContent = 'Month total: -¥' + Math.round(Math.abs(monthTotal)).toLocaleString();
+  } else {
+    totalEl.textContent = '';
+  }
 }
 
 // ── TradingView charts ─────────────────────────────────────────────────────────
