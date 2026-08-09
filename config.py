@@ -42,6 +42,36 @@ CONFIRM_CANDLES = 100
 ENTRY_CANDLES   = 100
 TIMING_CANDLES  = 100   # M1 bars for MACD + RSI momentum
 
+# ── Per-Symbol Timeframe Overrides ─────────────────────────────────────────────
+# Indices use a tighter ladder (H1/M30/M15/M5/M1); GOLD keeps the global defaults.
+SYMBOL_TIMEFRAMES: dict = {
+    "#USSPX500":  dict(htf="H1", trend="M30", confirm="M15", entry="M5", timing="M1"),
+    "#USNDAQ100": dict(htf="H1", trend="M30", confirm="M15", entry="M5", timing="M1"),
+    "#Japan225":  dict(htf="H1", trend="M30", confirm="M15", entry="M5", timing="M1"),
+}
+SYMBOL_TF_CANDLES: dict = {
+    "#USSPX500":  dict(htf=250, trend=250, confirm=100, entry=100, timing=100),
+    "#USNDAQ100": dict(htf=250, trend=250, confirm=100, entry=100, timing=100),
+    "#Japan225":  dict(htf=250, trend=250, confirm=100, entry=100, timing=100),
+}
+
+
+def tf_for(symbol: str, slot: str) -> tuple:
+    """Return (timeframe_str, candle_count) for a symbol+slot.
+    Falls back to the global five-timeframe defaults."""
+    defaults = {
+        "htf":     (HTF_TIMEFRAME,     HTF_CANDLES),
+        "trend":   (TREND_TIMEFRAME,   TREND_CANDLES),
+        "confirm": (CONFIRM_TIMEFRAME, CONFIRM_CANDLES),
+        "entry":   (ENTRY_TIMEFRAME,   ENTRY_CANDLES),
+        "timing":  (TIMING_TIMEFRAME,  TIMING_CANDLES),
+    }
+    tf, n = defaults[slot]
+    tf = SYMBOL_TIMEFRAMES.get(symbol, {}).get(slot, tf)
+    n  = SYMBOL_TF_CANDLES.get(symbol, {}).get(slot, n)
+    return tf, n
+
+
 # ── RSI Pullback Zones ─────────────────────────────────────────────────────────
 # DATA COLLECTION — wider zones, more candles qualify
 RSI_BULL_MIN = 35   # REAL MONEY: 40

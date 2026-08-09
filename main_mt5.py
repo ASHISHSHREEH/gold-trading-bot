@@ -158,7 +158,9 @@ def is_trading_session() -> bool:
 
 def analyse_htf(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """H4: big-picture direction via MA50/MA200 — acts as a hard gate."""
-    df = fetcher.get_historical_data(config.HTF_TIMEFRAME, config.HTF_CANDLES, symbol)
+    # [pre-symboltf] df = fetcher.get_historical_data(config.HTF_TIMEFRAME, config.HTF_CANDLES, symbol)
+    _htf_tf, _htf_n = config.tf_for(symbol, "htf")
+    df = fetcher.get_historical_data(_htf_tf, _htf_n, symbol)
     if df.empty or len(df) < _MA_PERIODS_TREND[-1] + 5:
         logger.warning(f"[{symbol}] Insufficient H4 data.")
         return None
@@ -167,7 +169,7 @@ def analyse_htf(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]
     ana   = _IND["ma"].analyze_latest(df["close"].iloc[:-1], ma_df.iloc[:-1])
 
     return {
-        "timeframe": config.HTF_TIMEFRAME,
+        "timeframe": _htf_tf,
         "price":     float(df["close"].iloc[-2]),
         "ma_fast":   ana["ma_fast"],
         "ma_slow":   ana["ma_slow"],
@@ -177,7 +179,9 @@ def analyse_htf(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]
 
 def analyse_trend(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """H1: establish major trend direction via MA50/MA200 crossover."""
-    df = fetcher.get_historical_data(config.TREND_TIMEFRAME, config.TREND_CANDLES, symbol)
+    # [pre-symboltf] df = fetcher.get_historical_data(config.TREND_TIMEFRAME, config.TREND_CANDLES, symbol)
+    _trend_tf, _trend_n = config.tf_for(symbol, "trend")
+    df = fetcher.get_historical_data(_trend_tf, _trend_n, symbol)
     if df.empty or len(df) < _MA_PERIODS_TREND[-1] + 5:
         logger.warning(f"[{symbol}] Insufficient H1 data.")
         return None
@@ -187,7 +191,7 @@ def analyse_trend(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     ana   = _IND["ma"].analyze_latest(df["close"].iloc[:-1], ma_df.iloc[:-1])
 
     return {
-        "timeframe": config.TREND_TIMEFRAME,
+        "timeframe": _trend_tf,
         "price":     float(df["close"].iloc[-2]),
         "timestamp": df.index[-2],
         "ma_fast":   ana["ma_fast"],
@@ -210,7 +214,9 @@ def entry_spread(fetcher: MT5DataFetcher, symbol: str) -> float:
 
 def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """M15: confirm the H1 trend via MA structure + MACD direction."""
-    df = fetcher.get_historical_data(config.CONFIRM_TIMEFRAME, config.CONFIRM_CANDLES, symbol)
+    # [pre-symboltf] df = fetcher.get_historical_data(config.CONFIRM_TIMEFRAME, config.CONFIRM_CANDLES, symbol)
+    _confirm_tf, _confirm_n = config.tf_for(symbol, "confirm")
+    df = fetcher.get_historical_data(_confirm_tf, _confirm_n, symbol)
     if df.empty or len(df) < 60:
         logger.warning(f"[{symbol}] Insufficient M15 data.")
         return None
@@ -224,7 +230,7 @@ def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, 
     macd_ana = _IND["macd"].analyze_latest(macd_df)
 
     return {
-        "timeframe": config.CONFIRM_TIMEFRAME,
+        "timeframe": _confirm_tf,
         "price":     float(df["close"].iloc[-2]),
         "timestamp": df.index[-2],
         "ma_trend":  ma_ana["trend"],
@@ -236,8 +242,11 @@ def analyse_confirm(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, 
 
 def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """M5: RSI + BB + volume + swing levels + spike filter + breakout detector."""
-    candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5, 60)
-    df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
+    # [pre-symboltf] candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5, 60)
+    # [pre-symboltf] df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
+    _entry_tf, _entry_n = config.tf_for(symbol, "entry")
+    candles = max(_entry_n, config.VOLUME_LOOKBACK + 5, 60)
+    df = fetcher.get_historical_data(_entry_tf, candles, symbol)
     if df.empty or len(df) < 30:
         logger.warning(f"[{symbol}] Insufficient M5 data.")
         return None
@@ -276,7 +285,7 @@ def analyse_entry(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, An
     pattern_info = detect_patterns(df)
 
     return {
-        "timeframe":      config.ENTRY_TIMEFRAME,
+        "timeframe":      _entry_tf,
         "price":          float(df["close"].iloc[-1]),
         "timestamp":      df.index[-1],
         "atr":            atr_val,
@@ -301,7 +310,9 @@ def entry_spread(fetcher: MT5DataFetcher, symbol: str) -> Optional[float]:
 
 def analyse_timing(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, Any]]:
     """M1: final entry timing — MACD momentum + RSI direction."""
-    df = fetcher.get_historical_data(config.TIMING_TIMEFRAME, config.TIMING_CANDLES, symbol)
+    # [pre-symboltf] df = fetcher.get_historical_data(config.TIMING_TIMEFRAME, config.TIMING_CANDLES, symbol)
+    _timing_tf, _timing_n = config.tf_for(symbol, "timing")
+    df = fetcher.get_historical_data(_timing_tf, _timing_n, symbol)
     if df.empty or len(df) < 40:
         logger.warning(f"[{symbol}] Insufficient M1 data.")
         return None
@@ -325,7 +336,7 @@ def analyse_timing(fetcher: MT5DataFetcher, symbol: str) -> Optional[Dict[str, A
         direction = "NEUTRAL"
 
     return {
-        "timeframe": config.TIMING_TIMEFRAME,
+        "timeframe": _timing_tf,
         "macd":      macd_ana["signal"],
         "rsi":       round(rsi_val, 1) if rsi_val is not None else None,
         "direction": direction,
@@ -619,9 +630,9 @@ def manage_open_positions(
 
         # Fetch current ATR, cached per symbol per cycle
         if symbol not in _atr_cache:
-            df = fetcher.get_historical_data(
-                config.ENTRY_TIMEFRAME, config.ENTRY_CANDLES, symbol
-            )
+            # [pre-symboltf] df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, config.ENTRY_CANDLES, symbol)
+            _pos_entry_tf, _pos_entry_n = config.tf_for(symbol, "entry")
+            df = fetcher.get_historical_data(_pos_entry_tf, _pos_entry_n, symbol)
             _atr_cache[symbol] = _IND["atr"].get_latest(df) if not df.empty else None
         atr = _atr_cache[symbol]
         if state["atr"] is None and atr:
@@ -770,26 +781,32 @@ def display_symbol_analysis(
     m1_rsi   = f"{timing['rsi']}" if timing["rsi"] is not None else "N/A"
     vol_flag = "✓" if entry["volume_ok"] else "✗"
 
+    # [pre-symboltf] Row labels were hardcoded: H4 / H1 / M15 / M5 / M1
+    _htf_lbl = htf["timeframe"]
+    _tr_lbl  = trend["timeframe"]
+    _cf_lbl  = confirm["timeframe"]
+    _en_lbl  = entry["timeframe"]
+    _tm_lbl  = timing["timeframe"]
     _line()
     print(f"  [{label}]")
     print(
-        f"  H4  Bias   : {htf['trend']:<14}  "
+        f"  {_htf_lbl:<3} Bias   : {htf['trend']:<14}  "
         f"MA50={htf['ma_fast']:.2f}  MA200={htf['ma_slow']:.2f}"
     )
     print(
-        f"  H1  Trend  : {trend['trend']:<14}  "
+        f"  {_tr_lbl:<3} Trend  : {trend['trend']:<14}  "
         f"MA50={trend['ma_fast']:.2f}  MA200={trend['ma_slow']:.2f}"
     )
     print(
-        f"  M15 Confirm: {confirm['ma_trend']:<14}  "
+        f"  {_cf_lbl:<3} Confirm: {confirm['ma_trend']:<14}  "
         f"MACD={confirm['macd']}"
     )
     print(
-        f"  M5  Entry  : price={entry['price']:.2f}  ATR={entry['atr']:.4f}  "
+        f"  {_en_lbl:<3} Entry  : price={entry['price']:.2f}  ATR={entry['atr']:.4f}  "
         f"RSI={rsi_str}  BB={entry['bb']['position']}  Vol={vol_flag}"
     )
     print(
-        f"  M1  Timing : {timing['direction']:<14}  "
+        f"  {_tm_lbl:<3} Timing : {timing['direction']:<14}  "
         f"MACD={timing['macd']}  RSI={m1_rsi}"
     )
     print(
@@ -1071,8 +1088,11 @@ def scan_symbol(
         if not blocked:
             # Layer 2: ATR spike guard (catches unscheduled surprises)
             try:
-                candles_atr = max(config.ENTRY_CANDLES, 30)
-                atr_df      = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles_atr, symbol)
+                # [pre-symboltf] candles_atr = max(config.ENTRY_CANDLES, 30)
+                # [pre-symboltf] atr_df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles_atr, symbol)
+                _news_tf, _news_n = config.tf_for(symbol, "entry")
+                candles_atr = max(_news_n, 30)
+                atr_df      = fetcher.get_historical_data(_news_tf, candles_atr, symbol)
                 if not atr_df.empty:
                     atr_series  = _IND["atr"].calculate(atr_df)
                     blocked, reason = check_atr_spike(
@@ -1205,8 +1225,11 @@ def scan_symbol(
 
         # ── Trade snapshot image ───────────────────────────────────────────────
         try:
-            candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
-            snap_df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
+            # [pre-symboltf] candles = max(config.ENTRY_CANDLES, config.VOLUME_LOOKBACK + 5)
+            # [pre-symboltf] snap_df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, candles, symbol)
+            _snap_tf, _snap_n = config.tf_for(symbol, "entry")
+            candles = max(_snap_n, config.VOLUME_LOOKBACK + 5)
+            snap_df = fetcher.get_historical_data(_snap_tf, candles, symbol)
             if not snap_df.empty:
                 bb_df    = _IND["bb"].calculate_bands(snap_df["close"])
                 snap_df  = snap_df.join(bb_df)
@@ -1491,7 +1514,9 @@ def _reconcile_positions(fetcher: MT5DataFetcher) -> None:
         # Estimate ATR from current M5 data
         atr_val = None
         try:
-            df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, config.ENTRY_CANDLES, p.symbol)
+            # [pre-symboltf] df = fetcher.get_historical_data(config.ENTRY_TIMEFRAME, config.ENTRY_CANDLES, p.symbol)
+            _rec_tf, _rec_n = config.tf_for(p.symbol, "entry")
+            df = fetcher.get_historical_data(_rec_tf, _rec_n, p.symbol)
             if not df.empty:
                 atr_val = _IND["atr"].get_latest(df)
         except Exception:
