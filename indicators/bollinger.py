@@ -3,8 +3,7 @@ import numpy as np
 import logging
 from typing import Union, Dict, Any, Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# [pre-logfix] logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 class BollingerBandsCalculator:

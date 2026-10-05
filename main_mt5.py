@@ -19,6 +19,7 @@ Prerequisites:
 
 import json
 import logging
+import logging.handlers
 import os
 import sys
 import time
@@ -63,14 +64,34 @@ from notifications.telegram_notifier import (
 from notifications.ai_commentary import send_trade_commentary_async
 
 # ── Logging ────────────────────────────────────────────────────────────────────
+# [pre-logfix] logging.basicConfig(
+# [pre-logfix]     level=logging.INFO,
+# [pre-logfix]     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+# [pre-logfix]     handlers=[
+# [pre-logfix]         logging.FileHandler("logs/mt5_bot.log"),
+# [pre-logfix]         logging.StreamHandler(sys.stdout),
+# [pre-logfix]     ],
+# [pre-logfix] )
+# Root cause of empty log file: bollinger/rsi/macd/moving_average all called
+# logging.basicConfig() at import time (before this line), causing Python to
+# silently ignore this call — FileHandler was never attached.
+# Fix: force=True overrides any prior basicConfig; RotatingFileHandler prevents
+# unbounded log growth; encoding="utf-8" matches the stdout reconfigure above.
 os.makedirs("logs", exist_ok=True)
+_log_fmt = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+_file_handler = logging.handlers.RotatingFileHandler(
+    "logs/mt5_bot.log",
+    maxBytes=10 * 1024 * 1024,   # 10 MB per file
+    backupCount=5,
+    encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter(_log_fmt))
+_stdout_handler = logging.StreamHandler(sys.stdout)
+_stdout_handler.setFormatter(logging.Formatter(_log_fmt))
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    handlers=[
-        logging.FileHandler("logs/mt5_bot.log"),
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[_file_handler, _stdout_handler],
+    force=True,   # overrides any basicConfig already called by imported modules
 )
 logger = logging.getLogger("GoldBot-MT5")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -1644,6 +1665,7 @@ def main():
         )
 
     acct = fetcher.get_account_info()
+    
     if not acct:
         logger.critical("Cannot read account info.")
         fetcher.disconnect()
