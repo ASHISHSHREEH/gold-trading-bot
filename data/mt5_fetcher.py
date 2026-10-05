@@ -5,7 +5,7 @@ argument so the bot can trade GOLD, indices, and FX from one session.
 """
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 
 import pandas as pd
@@ -93,11 +93,20 @@ class MT5DataFetcher:
             if not mt5.symbol_select(sym, True):
                 failed.append(sym)
 
+        for sym in config.SYMBOLS:
+            if sym not in failed:
+                tick = mt5.symbol_info_tick(sym)
+                if tick is None or tick.bid == 0 or tick.ask == 0:
+                    failed.append(sym)
+
         if failed:
             logger.error(
                 f"Symbols not available on this account: {failed}\n"
                 f"  Tip: check MT5_SYMBOLS in .env against what the broker offers."
             )
+            config.SYMBOLS = [s for s in config.SYMBOLS if s not in failed]
+
+        if not config.SYMBOLS:
             mt5.shutdown()
             return False
 
@@ -158,11 +167,14 @@ class MT5DataFetcher:
         if tick is None:
             logger.error(f"get_current_tick({sym}) failed: {mt5.last_error()}")
             return None
+        if not tick.bid or not tick.ask:
+            logger.error(f"get_current_tick({sym}): zero bid/ask (bid={tick.bid}, ask={tick.ask})")
+            return None
         return {
             "bid":    tick.bid,
             "ask":    tick.ask,
             "spread": round(tick.ask - tick.bid, 5),
-            "time":   datetime.fromtimestamp(tick.time),
+            "time":   datetime.fromtimestamp(tick.time, timezone.utc),
         }
 
     # ── Account & Symbol Info ─────────────────────────────────────────────────
