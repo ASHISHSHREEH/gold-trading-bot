@@ -406,7 +406,8 @@ class MT5Executor:
         lot_step = sym_info["lot_step"]
         min_lot  = sym_info["min_lot"]
         max_lot  = sym_info["max_lot"]
-        lots     = round((raw // lot_step) * lot_step, 8)
+        # [pre-roundfix] lots = round((raw // lot_step) * lot_step, 8)
+        lots     = round(int(raw / lot_step + 1e-9) * lot_step, 8)
         if lots < min_lot:
             over_risk = min_lot / raw if raw > 0 else float("inf")
             if over_risk > config.MAX_LOT_OVER_RISK:
