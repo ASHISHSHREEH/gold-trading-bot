@@ -108,7 +108,8 @@ class MT5Executor:
         # [pre-fixedlots]     lots = self._round_lots(lots * risk_multiplier, sym_info)
         fixed_lot = config.SYMBOL_FIXED_LOTS.get(symbol)
         if fixed_lot is not None:
-            base = fixed_lot if risk_multiplier == 1.0 else fixed_lot * config.PYRAMID_LOT_RATIO
+            # [pre-fixedlots-v2] base = fixed_lot if risk_multiplier == 1.0 else fixed_lot * config.PYRAMID_LOT_RATIO
+            base = fixed_lot
             lots = self._round_lots(base, sym_info)
             logger.info(f"[{symbol}] Fixed lot {lots} (risk-based sizing bypassed)")
         else:
