@@ -103,9 +103,18 @@ class MT5Executor:
             logger.warning(f"[{symbol}] R:R {rr:.2f} < {config.MIN_RR_RATIO}. Blocked.")
             return None
 
-        lots = self._calculate_lots(price, sl, acct["balance"], sym_info, acct.get("currency", "USD"))
-        if risk_multiplier != 1.0:
-            lots = self._round_lots(lots * risk_multiplier, sym_info)
+        # [pre-fixedlots] lots = self._calculate_lots(price, sl, acct["balance"], sym_info, acct.get("currency", "USD"))
+        # [pre-fixedlots] if risk_multiplier != 1.0:
+        # [pre-fixedlots]     lots = self._round_lots(lots * risk_multiplier, sym_info)
+        fixed_lot = config.SYMBOL_FIXED_LOTS.get(symbol)
+        if fixed_lot is not None:
+            base = fixed_lot if risk_multiplier == 1.0 else fixed_lot * config.PYRAMID_LOT_RATIO
+            lots = self._round_lots(base, sym_info)
+            logger.info(f"[{symbol}] Fixed lot {lots} (risk-based sizing bypassed)")
+        else:
+            lots = self._calculate_lots(price, sl, acct["balance"], sym_info, acct.get("currency", "USD"))
+            if risk_multiplier != 1.0:
+                lots = self._round_lots(lots * risk_multiplier, sym_info)
         if lots == 0.0:
             return None
 

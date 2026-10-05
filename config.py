@@ -122,6 +122,18 @@ SYMBOL_RISK: dict = {
     "#USNDAQ100": 0.005,
     "#Japan225": 0.005,
 }
+
+# ── Fixed per-symbol lot sizes ────────────────────────────────────────────────
+# When a symbol is listed here, this lot is used INSTEAD of
+# risk-based sizing. SYMBOL_RISK / MAX_LOT_OVER_RISK are
+# then ignored for that symbol. Empty dict = risk-based for all.
+SYMBOL_FIXED_LOTS: dict = {
+    "GOLD":        0.01,
+    "#USSPX500":   0.10,
+    "#USNDAQ100":  0.03,
+    "#Japan225":   0.01,
+}
+
 MAX_DAILY_LOSS = 0.03
 MAX_POSITIONS  = 4
 MAX_POSITIONS_PER_SYMBOL: dict = {
@@ -205,7 +217,8 @@ NEWS_ATR_SPIKE_MULT    = 2.0   # block if current ATR > 2× its 20-bar average
 #   NEWS_BLACKOUT=FOMC 2026-06-11 19:00, PCE 2026-06-28 13:30
 
 # ── AI Layer ───────────────────────────────────────────────────────────────────
-AI_VETO_ENABLED = True    # veto re-enabled 2026-07-30 — 6/6 overridden vetoes lost
+# [pre-vetooff] AI_VETO_ENABLED = True    # veto re-enabled 2026-07-30 — 6/6 overridden vetoes lost
+AI_VETO_ENABLED = False   # 2026-10-05 — v3 AUC 0.464, 351 vetoes / 0 approvals
 
 # ── Scan Loop ──────────────────────────────────────────────────────────────────
 SCAN_INTERVAL = 60
