@@ -83,11 +83,11 @@ RSI_BEAR_MAX = 65   # REAL MONEY: 60
 # DATA COLLECTION — empty = trade 24/5, no dead zones
 # REAL MONEY: restore the dict below
 #   SESSIONS = {
-#       "Tokyo":   (0,  2),
+#       "Tokyo":   (0,  7),   # full Japan session: 9am-4pm JST (00:00-06:59 UTC)
 #       "London":  (7,  16),
 #       "NewYork": (13, 21),
 #   }
-SESSIONS = {"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}
+SESSIONS = {"Tokyo": (0, 7), "London": (7, 16), "NewYork": (13, 21)}
 
 # Per-symbol session allowlist.  Symbols absent from this dict trade in all
 # active sessions as before.  Symbols listed here are skipped in any session
@@ -243,7 +243,7 @@ _PHASE_SETTINGS = {
             h4_hard_gate=False, sessions={}),
     3: dict(min_score=3, volume_ratio=0.0, rsi_bull=(40, 55), rsi_bear=(45, 60),
             h4_hard_gate=False,
-            sessions={"Tokyo": (0, 2), "London": (7, 16), "NewYork": (13, 21)}),
+            sessions={"Tokyo": (0, 7), "London": (7, 16), "NewYork": (13, 21)}),
 }
 
 # Runtime mutable — updated by apply_trading_phase()
