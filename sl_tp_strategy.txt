@@ -1,0 +1,154 @@
+================================================================================
+  STOP-LOSS & TAKE-PROFIT STRATEGY
+  Gold Trading Bot — MT5 Multi-Symbol
+  Last updated: 2026-10-06
+================================================================================
+
+--------------------------------------------------------------------------------
+1. INITIAL SL PLACEMENT  (at trade entry)
+--------------------------------------------------------------------------------
+
+Two modes depending on whether the signal scanner supplies a swing SL:
+
+  A) ATR-based SL  [default, most trades]
+     ----------------------------------------
+     sl_distance = ATR(14) x ATR_SL_MULT
+
+     ATR_SL_MULT per symbol:
+       GOLD       1.5  x ATR   (config default)
+       #USSPX500  1.5  x ATR   (config default)
+       #USNDAQ100 3.0  x ATR   (SYMBOL_ATR_SL_MULT override)
+       #Japan225  2.5  x ATR   (SYMBOL_ATR_SL_MULT override)
+
+     NASDAQ special case: if broker stops_level is set, the bot
+     also enforces a hard floor of 500 points (SYMBOL_FIXED_SL_POINTS).
+     500 pts x point(0.01) = 5.0 index units — clears broker minimum.
+     Whichever is larger (ATR-based or 500 pts) wins.
+
+  B) Swing-based SL  [when signal scanner detects a swing level]
+     ----------------------------------------
+     The scanner passes the exact swing high/low as custom_sl.
+     The executor then:
+       1. Calculates sl_distance = abs(entry - swing_sl)
+       2. Checks broker minimum distance (stops_level x point)
+       3. If sl_distance < minimum -> widens SL to the minimum floor
+       4. TP derived from the (possibly widened) sl_distance x MIN_RR_RATIO
+
+     Floor priority order (highest wins):
+       SYMBOL_FIXED_SL_POINTS  >  broker stops_level  >  ATR-based floor
+
+
+--------------------------------------------------------------------------------
+2. INITIAL TP PLACEMENT  (at trade entry)
+--------------------------------------------------------------------------------
+
+  ATR-based path:
+    tp_distance = sl_distance x (ATR_TP_MULT / ATR_SL_MULT)
+                = sl_distance x (3.0 / 1.5)
+                = sl_distance x 2.0
+
+  Swing-based path:
+    tp_distance = sl_distance x MIN_RR_RATIO  (= 2.0)
+
+  Both paths guarantee a minimum 2:1 R:R.
+  Trade is BLOCKED before it is sent if actual R:R < 1.999.
+
+  Summary table (ATR-based, approximate):
+    Symbol      SL mult   TP/SL ratio   effective TP mult
+    GOLD         1.5x       2.0x            3.0x ATR
+    #USSPX500    1.5x       2.0x            3.0x ATR
+    #USNDAQ100   3.0x       2.0x            6.0x ATR  (or from fixed 500 pts)
+    #Japan225    2.5x       2.0x            5.0x ATR
+
+
+--------------------------------------------------------------------------------
+3. POSITION MANAGEMENT  (after entry, runs every scan cycle ~60 s)
+--------------------------------------------------------------------------------
+
+Three sequential stages keyed on unrealised R (R = profit / initial_risk):
+
+  Stage 1 — At 1R profit  (BREAKEVEN_AT_R = 1.0)
+  ------------------------------------------------
+    a) Partial close: 50% of position volume is closed at market
+       (PARTIAL_TP_RATIO = 0.5).  Locks in half the intended R.
+
+    b) SL moved to breakeven (entry price).
+       Remaining 50% of position now has zero downside risk.
+
+  Stage 2 — At 1.5R+  (TRAIL_START_AT_R = 1.5)
+  ------------------------------------------------
+    Trailing stop activates.
+
+    trail_distance = live_ATR(14) x TRAIL_ATR_MULT  (= 0.5)
+
+    BUY:  new_trail = current_price - trail_distance
+          Advance only — SL moves up, never back down.
+
+    SELL: new_trail = current_price + trail_distance
+          Advance only — SL moves down, never back up.
+
+    The trail keeps tightening as price moves further in favour.
+    Position exits either at the hard TP or when price reverses
+    back through the trailing stop.
+
+  Stage 3 — Hard TP hit
+  ------------------------------------------------
+    MT5 closes the remaining 50% automatically when price reaches
+    the original TP level set at entry.
+
+
+--------------------------------------------------------------------------------
+4. EXAMPLE TRADE  (GOLD, BUY)
+--------------------------------------------------------------------------------
+
+  Entry price  :  2350.00
+  ATR(14)      :  8.00
+  SL mult      :  1.5
+  sl_distance  :  8.00 x 1.5  = 12.00 pts
+  TP mult      :  2.0 (MIN_RR_RATIO)
+  tp_distance  :  12.00 x 2.0 = 24.00 pts
+
+  SL at entry  :  2350.00 - 12.00 = 2338.00
+  TP at entry  :  2350.00 + 24.00 = 2374.00
+
+  At 2362.00 (+12 pts, 1R):
+    -> Close 50% volume at 2362.00  (partial TP locked)
+    -> SL moved to 2350.00  (breakeven)
+
+  At 2368.00 (1.5R):
+    -> Trail activates: SL = 2368.00 - (8.00 x 0.5) = 2364.00
+
+  At 2372.00 (approaching TP):
+    -> Trail: SL = 2372.00 - 4.00 = 2368.00
+
+  If price hits 2374.00:
+    -> Hard TP fires, remaining 50% closed at 2374.00
+
+
+--------------------------------------------------------------------------------
+5. KEY CONFIG VALUES  (config.py)
+--------------------------------------------------------------------------------
+
+  ATR_PERIOD          = 14
+  ATR_SL_MULT         = 1.5       (global default; overridden per symbol above)
+  ATR_TP_MULT         = 3.0       (used only in the ATR-path TP formula)
+  MIN_RR_RATIO        = 2.0       (hard gate — trade blocked if R:R < 2.0)
+  BREAKEVEN_AT_R      = 1.0       (trigger for partial close + BE move)
+  TRAIL_START_AT_R    = 1.5       (trigger for trailing stop)
+  TRAIL_ATR_MULT      = 0.5       (trail distance = 0.5 x ATR)
+  PARTIAL_TP_RATIO    = 0.5       (50% closed at 1R)
+
+  SYMBOL_ATR_SL_MULT  = { #Japan225: 2.5,  #USNDAQ100: 3.0 }
+  SYMBOL_FIXED_SL_POINTS = { #USNDAQ100: 500 }
+
+
+--------------------------------------------------------------------------------
+6. PYRAMID ADD-ON  (scaling into winners)
+--------------------------------------------------------------------------------
+
+  Triggered when an existing position is >= 1R in profit (PYRAMID_MIN_R).
+  Add-on uses the same fixed lot as the original (PYRAMID_MAX_ADDS = 1).
+  The add-on gets its own SL/TP calculated fresh at the time of entry.
+  Breakeven + trail logic runs independently on the add-on ticket.
+
+================================================================================
