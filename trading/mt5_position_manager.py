@@ -3,8 +3,10 @@ MT5PositionManager — reads live positions from the MT5 terminal.
 Tracks positions across ALL configured symbols combined.
 Risk gates are account-wide, not per-symbol.
 """
+import json
 import logging
-from datetime import datetime
+import os
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 
 try:
@@ -16,6 +18,11 @@ import config
 
 logger = logging.getLogger(__name__)
 
+_DAILY_BASELINE_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "data", "daily_baseline.json",
+)
+
 
 class MT5PositionManager:
 
@@ -24,8 +31,45 @@ class MT5PositionManager:
         self._session_start_balance: float = 0.0
 
     def set_session_start_balance(self, balance: float):
+        # [pre-dailyreset] self._session_start_balance = balance
+        # [pre-dailyreset] logger.info(f"Session start balance locked at {balance:.2f}")
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with open(_DAILY_BASELINE_PATH, encoding="utf-8") as fh:
+                stored = json.load(fh)
+            if stored.get("date") == today:
+                self._session_start_balance = float(stored["balance"])
+                logger.info(
+                    "Daily baseline loaded for %s: %.2f (restart mid-day — budget preserved)",
+                    today, self._session_start_balance,
+                )
+                return
+        except (FileNotFoundError, KeyError, ValueError):
+            pass
         self._session_start_balance = balance
-        logger.info(f"Session start balance locked at {balance:.2f}")
+        self._write_daily_baseline(today, balance)
+
+    def _write_daily_baseline(self, date_iso: str, balance: float) -> None:
+        try:
+            os.makedirs(os.path.dirname(_DAILY_BASELINE_PATH), exist_ok=True)
+            with open(_DAILY_BASELINE_PATH, "w", encoding="utf-8") as fh:
+                json.dump({"date": date_iso, "balance": balance}, fh)
+            logger.info("Daily baseline reset for %s: %.2f", date_iso, balance)
+        except Exception as exc:
+            logger.warning("Failed to write daily_baseline.json: %s", exc)
+
+    def refresh_daily_baseline(self, balance: float) -> None:
+        """Call on every scan cycle to roll the baseline forward at UTC midnight."""
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            with open(_DAILY_BASELINE_PATH, encoding="utf-8") as fh:
+                stored = json.load(fh)
+            if stored.get("date") == today:
+                return   # same day — keep existing baseline
+        except (FileNotFoundError, KeyError, ValueError):
+            pass
+        self._session_start_balance = balance
+        self._write_daily_baseline(today, balance)
 
     # ── Position Queries ───────────────────────────────────────────────────────
 
@@ -208,7 +252,7 @@ class MT5PositionManager:
             return []
 
         use_magic = magic if magic is not None else config.MAGIC
-        from datetime import datetime, timezone
+        # [pre-dailyreset] from datetime import datetime, timezone  # now imported at module level
 
         try:
             from_dt = datetime.fromtimestamp(since_epoch, tz=timezone.utc)

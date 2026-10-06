@@ -1442,6 +1442,10 @@ def run_scan(
     acct = fetcher.get_account_info()
     display_account(acct)
 
+    # Roll the daily drawdown baseline forward at UTC midnight (Fix: calendar-day circuit breaker)
+    if acct:
+        pos_mgr.refresh_daily_baseline(acct["balance"])
+
     positions = pos_mgr.get_open_positions()
     display_positions(positions)
     _write_live_state(acct, positions)
